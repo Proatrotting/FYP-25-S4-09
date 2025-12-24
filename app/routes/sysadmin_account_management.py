@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
 from app.master_node_db import MasterNodeDB, get_master_db
 
@@ -10,6 +10,7 @@ router = APIRouter(prefix="/sysadmin/accounts", tags=["sysadmin"])
 class AccountSelector(BaseModel):
     account_id: Optional[str] = None
     username: Optional[str] = None
+
 
 class SysadminUser(BaseModel):
     account_id: str
@@ -23,9 +24,6 @@ class SysadminUser(BaseModel):
 def list_all_users(
     master_db: MasterNodeDB = Depends(get_master_db),
 ):
-    """
-    List all user accounts for sysadmin dashboard.
-    """
     rows = master_db.select(
         """
         SELECT account_id, username, email, account_type, created_at
@@ -41,7 +39,11 @@ def list_all_users(
         if isinstance(created_at, str):
             created_at_str = created_at
         else:
-            created_at_str = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
+            created_at_str = (
+                created_at.isoformat()
+                if hasattr(created_at, "isoformat")
+                else str(created_at)
+            )
 
         users.append(
             SysadminUser(
@@ -54,7 +56,7 @@ def list_all_users(
         )
 
     return users
-    
+
 
 def resolve_account_id(selector: AccountSelector, master_db: MasterNodeDB) -> str:
     """
@@ -98,15 +100,10 @@ def deactivate_account(
     """
     account_id = resolve_account_id(selector, master_db)
 
-    # For now, do nothing except confirm existence.
-    # When you add a status column, replace this with an UPDATE.
-    # Example for later:
-    # master_db.execute(
-    #     "UPDATE account SET status = $1 WHERE account_id = $2",
-    #     ["DEACTIVATED", account_id],
-    # )
-
-    return {"message": "Account exists (no status column yet)", "account_id": account_id}
+    return {
+        "message": "Account exists (no status column yet)",
+        "account_id": account_id,
+    }
 
 
 @router.delete("", status_code=200)
@@ -116,11 +113,9 @@ def delete_account(
 ):
     """
     Hard delete an account by account_id or username.
-    Later you can switch this to a soft delete using a status column.
     """
     account_id = resolve_account_id(selector, master_db)
 
-    # Hard delete for now
     master_db.execute(
         "DELETE FROM account WHERE account_id = $1",
         [account_id],

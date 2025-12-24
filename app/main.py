@@ -19,7 +19,8 @@ from app.routes.file_sharing import router as file_sharing_router
 from app.routes.recycle_bin import router as recycle_bin_router
 from app.routes.upload_folders import router as upload_folders_router
 from app.routes.sysadmin_account_management import router as sysadmin_account_management_router
-from app.routes.oneTimeDebugging import router as oneTimeDebugging_router
+from app.routes.sysadmin_view_activity import router as sysadmin_view_activity_router
+# from app.routes.oneTimeDebugging import router as oneTimeDebugging_router
 
 # Get maximum request size from environment variable (default 200MB)
 MAX_REQUEST_SIZE = int(os.getenv("MAX_REQUEST_SIZE", "209715200"))  # 200MB in bytes
@@ -68,7 +69,8 @@ app.include_router(file_sharing_router)
 app.include_router(recycle_bin_router)
 app.include_router(upload_folders_router)
 app.include_router(sysadmin_account_management_router)
-app.include_router(oneTimeDebugging_router)
+app.include_router(sysadmin_view_activity_router)
+# app.include_router(oneTimeDebugging_router)
 
 # Health check
 @app.get("/healthz")
