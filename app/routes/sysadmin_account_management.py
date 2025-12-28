@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -22,16 +22,51 @@ class SysadminUser(BaseModel):
 
 @router.get("", response_model=List[SysadminUser])
 def list_all_users(
+    username: Optional[str] = Query(None, description="Filter by username (contains, case-insensitive)"),
+    email: Optional[str] = Query(None, description="Filter by email (contains, case-insensitive)"),
+    account_type: Optional[str] = Query(None, description="Filter by account type (e.g. FREE, SYSADMIN)"),
+    # account_status: Optional[str] = Query(None, description="Filter by status (e.g. ACTIVE, DEACTIVATED)"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     master_db: MasterNodeDB = Depends(get_master_db),
 ):
-    rows = master_db.select(
-        """
+    sql = """
         SELECT account_id, username, email, account_type, created_at
         FROM account
-        ORDER BY created_at DESC
-        """,
-        [],
-    )
+    """
+    conditions = []
+    params: List[object] = []
+    idx = 1
+
+    # Optional filters
+    if username:
+        conditions.append(f"LOWER(username) LIKE ${idx}")
+        params.append(f"%{username.lower()}%")
+        idx += 1
+
+    if email:
+        conditions.append(f"LOWER(email) LIKE ${idx}")
+        params.append(f"%{email.lower()}%")
+        idx += 1
+
+    if account_type:
+        conditions.append(f"account_type = ${idx}")
+        params.append(account_type.upper())
+        idx += 1
+
+    # If you add a status column later:
+    # if account_status:
+    #     conditions.append(f"status = ${idx}")
+    #     params.append(account_status.upper())
+    #     idx += 1
+
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+
+    sql += f" ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+    params.extend([limit, offset])
+
+    rows = master_db.select(sql, params)
 
     users: List[SysadminUser] = []
     for r in rows:
@@ -39,11 +74,7 @@ def list_all_users(
         if isinstance(created_at, str):
             created_at_str = created_at
         else:
-            created_at_str = (
-                created_at.isoformat()
-                if hasattr(created_at, "isoformat")
-                else str(created_at)
-            )
+            created_at_str = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
 
         users.append(
             SysadminUser(
