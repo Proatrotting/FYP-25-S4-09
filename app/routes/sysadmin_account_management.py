@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from app.master_node_db import MasterNodeDB, get_master_db
+from app.dependencies.auth import require_sysadmin
 
 router = APIRouter(prefix="/sysadmin/accounts", tags=["sysadmin"])
 
@@ -22,13 +23,19 @@ class SysadminUser(BaseModel):
 
 @router.get("", response_model=List[SysadminUser])
 def list_all_users(
-    username: Optional[str] = Query(None, description="Filter by username (contains, case-insensitive)"),
-    email: Optional[str] = Query(None, description="Filter by email (contains, case-insensitive)"),
-    account_type: Optional[str] = Query(None, description="Filter by account type (e.g. FREE, SYSADMIN)"),
-    # account_status: Optional[str] = Query(None, description="Filter by status (e.g. ACTIVE, DEACTIVATED)"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    username: Optional[str] = Query(
+        None, description="Filter by username (contains, case-insensitive)"
+    ),
+    email: Optional[str] = Query(
+        None, description="Filter by email (contains, case-insensitive)"
+    ),
+    account_type: Optional[str] = Query(
+        None, description="Filter by account type (e.g. FREE, SYSADMIN)"
+    ),
+    limit: int = Query(50, ge=1, le=200, description="Number of users to return"),
+    offset: int = Query(0, ge=0, description="Number of users to skip"),
     master_db: MasterNodeDB = Depends(get_master_db),
+    _: dict = Depends(require_sysadmin),
 ):
     sql = """
         SELECT account_id, username, email, account_type, created_at
@@ -121,9 +128,11 @@ def resolve_account_id(selector: AccountSelector, master_db: MasterNodeDB) -> st
 
 
 @router.post("/deactivate", status_code=200)
+@router.post("/deactivate", status_code=200)
 def deactivate_account(
     selector: AccountSelector,
     master_db: MasterNodeDB = Depends(get_master_db),
+    _: dict = Depends(require_sysadmin),  # <--- protect
 ):
     """
     Placeholder deactivate: currently just checks that the account exists.
@@ -141,6 +150,7 @@ def deactivate_account(
 def delete_account(
     selector: AccountSelector,
     master_db: MasterNodeDB = Depends(get_master_db),
+    _: dict = Depends(require_sysadmin),
 ):
     """
     Hard delete an account by account_id or username.
@@ -153,3 +163,17 @@ def delete_account(
     )
 
     return {"message": "Account deleted", "account_id": account_id}
+
+@router.post("/_seed_sysadmin", status_code=200)
+def seed_sysadmin(
+    username: str,
+    master_db: MasterNodeDB = Depends(get_master_db),
+):
+    """
+    TEMP: Promote a user to SYSADMIN. Remove after use.
+    """
+    master_db.execute(
+        "UPDATE account SET account_type = $1 WHERE username = $2",
+        ["SYSADMIN", username],
+    )
+    return {"message": "Sysadmin updated", "username": username}

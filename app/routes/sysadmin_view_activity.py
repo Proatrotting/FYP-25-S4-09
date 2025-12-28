@@ -5,12 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, validator
 
 from app.master_node_db import MasterNodeDB, get_master_db
+from app.dependencies.auth import require_sysadmin
 
 router = APIRouter(prefix="/sysadmin/activity", tags=["sysadmin"])
 
 
 class SysadminActivityDetail(BaseModel):
     activity_id: str
+    account_id: str
     action_type: str
     resource_type: Optional[str] = None
     resource_id: Optional[str] = None
@@ -90,6 +92,7 @@ def get_user_activity_as_sysadmin(
     limit: int = Query(50, ge=1, le=200, description="Number of activities to return"),
     offset: int = Query(0, ge=0, description="Number of activities to skip"),
     master_db: MasterNodeDB = Depends(get_master_db),
+    _: dict = Depends(require_sysadmin),  # <--- protect
 ):
     """
     SysAdmin: View activity history for a specific user, similar to /activity/history
