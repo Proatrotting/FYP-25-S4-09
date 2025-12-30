@@ -35,4 +35,17 @@ export async function getRoles() {
     return result.profiles.map(profile => profile.profile_type);
 }
 
-// Just a test
+export async function forgotPassword(email) {
+  const res = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || "Failed to process password reset.");
+  }
+
+  return res.json(); // { message, email_verified }
+}

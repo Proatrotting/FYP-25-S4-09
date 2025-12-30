@@ -9,9 +9,8 @@ function ContactUs() {
         <div className="contactus-form-section">
           <form
             className="contactus-form"
-            action="mailto:graceteyyutong@email.com"
+            action="https://formspree.io/f/xjgvdyro"
             method="POST"
-            encType="text/plain"
           >
             <div className="form-group">
               <label htmlFor="contact-name">Name</label>
