@@ -5,9 +5,12 @@ import logging
 import requests
 import os
 import traceback
+import uuid
 
 from app.core.security import decode_access_token
 from app.routes.login import oauth2_scheme
+from app.master_node_db import MasterNodeDB, get_master_db
+from app.routes.upload_files import process_file_upload
 
 logger = logging.getLogger(__name__)
 
@@ -62,31 +65,35 @@ class FolderUploadResponse(BaseModel):
 
 # ===== HELPER FUNCTIONS =====
 
-def get_current_account_from_token(token: str):
-    """Get account info from token."""
-    try:
-        from app.master_node_db import get_master_db
-        
-        payload = decode_access_token(token)
-        if not payload:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-        
-        account_id = payload.get("sub")
-        if not account_id:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-        
-        # You can also use your existing master_db here
-        return {"account_id": account_id, "username": payload.get("username")}
-        
-    except Exception as e:
-        logger.error(f"Error getting account from token: {e}")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-
-def get_current_account(token=Depends(oauth2_scheme)):
+def get_current_account(
+    token=Depends(oauth2_scheme),
+    master_db: MasterNodeDB = Depends(get_master_db)
+) -> dict:
     """Get the current authenticated account."""
     token_str = token.credentials if hasattr(token, "credentials") else token
-    return get_current_account_from_token(token_str)
+    payload = decode_access_token(token_str)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    
+    account_id = payload.get("sub")
+    if not account_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    
+    account_result = master_db.select(
+        "SELECT ACCOUNT_ID, USERNAME, EMAIL, ACCOUNT_TYPE FROM ACCOUNT WHERE ACCOUNT_ID = $1",
+        [account_id]
+    )
+    
+    if not account_result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    
+    result = account_result[0]
+    account_dict = {}
+    for k, v in result.items():
+        key_lower = k.lower()
+        account_dict[key_lower] = v
+    
+    return account_dict
 
 
 def parse_folder_structure(files: List[FileInFolder]) -> List[Dict]:
@@ -121,71 +128,79 @@ def parse_folder_structure(files: List[FileInFolder]) -> List[Dict]:
     return folders
 
 
-async def create_single_folder_via_endpoint(
+def create_single_folder_direct(
     folder_name: str,
     parent_folder_id: Optional[str],
-    token: str
+    account_id: str,
+    master_db: MasterNodeDB
 ) -> str:
     """
-    Create a single folder by calling your existing /folders endpoint.
-    Returns the created folder_id.
+    Create a single folder using direct database calls.
+    Returns the created folder_id or existing folder_id if it already exists.
     """
     try:
-        # Prepare payload for your existing endpoint
-        folder_payload = {
-            "name": folder_name,
-            "parent_folder_id": parent_folder_id
-        }
+        # Validate parent folder exists if provided
+        if parent_folder_id is not None:
+            parent = master_db.select(
+                "SELECT FOLDER_ID FROM FOLDER WHERE FOLDER_ID = $1 AND ACCOUNT_ID = $2",
+                [parent_folder_id, account_id]
+            )
+            if not parent:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Parent folder {parent_folder_id} not found"
+                )
         
-        # Call your existing /folders endpoint
-        response = requests.post(
-            f"{FASTAPI_INTERNAL_URL}/api/folders",
-            json=folder_payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
-            },
-            timeout=30
-        )
-        
-        if response.status_code in [200, 201]:
-            result = response.json()
-            folder_id = str(result["folder_id"])
-            logger.info(f"Created folder '{folder_name}' with ID: {folder_id}")
-            return folder_id
-        elif response.status_code == 400 and "already exists" in response.text.lower():
-            # Folder already exists - try to get its ID
-            logger.warning(f"Folder '{folder_name}' already exists")
-            # For now, raise error - you could implement logic to fetch existing folder
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Folder '{folder_name}' already exists"
+        # Check if folder already exists
+        if parent_folder_id is None:
+            existing = master_db.select(
+                "SELECT FOLDER_ID FROM FOLDER WHERE ACCOUNT_ID = $1 AND PARENT_FOLDER_ID IS NULL AND NAME = $2",
+                [account_id, folder_name]
             )
         else:
-            logger.error(f"Failed to create folder '{folder_name}': {response.status_code} - {response.text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to create folder: {response.text}"
+            existing = master_db.select(
+                "SELECT FOLDER_ID FROM FOLDER WHERE ACCOUNT_ID = $1 AND PARENT_FOLDER_ID = $2 AND NAME = $3",
+                [account_id, parent_folder_id, folder_name]
             )
-            
+        
+        if existing:
+            # Return existing folder ID
+            folder_id = str(existing[0]['folder_id'])
+            logger.info(f"Folder '{folder_name}' already exists with ID: {folder_id}")
+            return folder_id
+        
+        # Create new folder
+        folder_id = str(uuid.uuid4())
+        master_db.execute(
+            """
+            INSERT INTO FOLDER (FOLDER_ID, NAME, ACCOUNT_ID, PARENT_FOLDER_ID, CREATED_AT)
+            VALUES ($1, $2, $3, $4, NOW())
+            """,
+            [folder_id, folder_name.strip(), account_id, parent_folder_id]
+        )
+        
+        logger.info(f"Created folder '{folder_name}' with ID: {folder_id}")
+        return folder_id
+        
     except HTTPException:
         raise
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request error creating folder '{folder_name}': {e}")
+    except Exception as e:
+        logger.error(f"Error creating folder '{folder_name}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create folder: {str(e)}"
         )
 
 
-async def create_folder_structure_via_endpoints(
+def create_folder_structure_direct(
     root_folder_name: str,
     files: List[FileInFolder],
     parent_folder_id: Optional[str],
-    token: str
+    account_id: str,
+    master_db: MasterNodeDB
 ) -> Dict[str, str]:
     """
-    Create the complete folder structure by calling your existing /folders endpoint.
+    Create the complete folder structure using direct database calls.
     Returns a mapping of folder paths to folder IDs.
     """
     folder_map = {}
@@ -195,10 +210,11 @@ async def create_folder_structure_via_endpoints(
     
     # Create root folder first
     try:
-        root_folder_id = await create_single_folder_via_endpoint(
+        root_folder_id = create_single_folder_direct(
             folder_name=root_folder_name,
             parent_folder_id=parent_folder_id,
-            token=token
+            account_id=account_id,
+            master_db=master_db
         )
         folder_map[root_folder_name] = root_folder_id
         logger.info(f"Created root folder: {root_folder_name} ({root_folder_id})")
@@ -216,92 +232,59 @@ async def create_folder_structure_via_endpoints(
         parent_id = folder_map.get(parent_path, root_folder_id)
         
         try:
-            folder_id = await create_single_folder_via_endpoint(
+            folder_id = create_single_folder_direct(
                 folder_name=folder['name'],
                 parent_folder_id=parent_id,
-                token=token
+                account_id=account_id,
+                master_db=master_db
             )
             folder_map[folder['path']] = folder_id
             logger.info(f"Created subfolder: {folder['path']} ({folder_id})")
             
-        except HTTPException as e:
-            if e.status_code == 409:  # Conflict - folder exists
-                logger.warning(f"Folder already exists: {folder['path']}, continuing...")
-                # You could implement logic here to fetch the existing folder_id
-                # For now, we'll skip it
-                continue
-            else:
-                logger.error(f"Failed to create folder {folder['path']}: {e.detail}")
-                # Continue with other folders
-                continue
         except Exception as e:
             logger.error(f"Error creating folder {folder['path']}: {e}")
+            # Continue with other folders even if one fails
             continue
     
     return folder_map
 
 
-async def upload_file_via_existing_endpoint(
+def upload_file_direct(
     filename: str,
     file_data_base64: str,
     folder_id: str,
     erasure_id: str,
     content_type: str,
-    token: str
+    account_id: str
 ) -> Dict:
     """
-    Upload a single file by calling your existing /files/upload endpoint.
+    Upload a single file by calling the upload logic directly (no HTTP overhead).
     Returns upload result with success status and details.
     """
     try:
-        # Prepare the payload for your existing upload endpoint
-        upload_payload = {
-            "filename": filename,
-            "data": file_data_base64,  # Already base64 encoded
-            "content_type": content_type,
-            "folder_id": folder_id,
-            "erasure_id": erasure_id
-        }
-        
-        # Call your existing upload endpoint
-        response = requests.post(
-            f"{FASTAPI_INTERNAL_URL}/api/files/upload",
-            json=upload_payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
-            },
-            timeout=300  # 5 minute timeout for large files
+        result = process_file_upload(
+            filename=filename,
+            file_data_base64=file_data_base64,
+            content_type=content_type,
+            folder_id=folder_id,
+            erasure_id=erasure_id,
+            account_id=account_id
         )
         
-        if response.status_code in [200, 201]:
-            result = response.json()
-            logger.info(f"Successfully uploaded {filename} via existing endpoint")
-            return {
-                "success": True,
-                "file_id": result.get("file_id"),
-                "version_id": result.get("version_id"),
-                "file_size": result.get("file_size"),
-                "fragments_stored": result.get("fragments_stored")
-            }
-        else:
-            logger.error(f"Upload failed for {filename}: {response.status_code} - {response.text}")
-            return {
-                "success": False,
-                "error": f"Upload endpoint returned {response.status_code}: {response.text}"
-            }
-            
-    except requests.exceptions.Timeout:
-        logger.error(f"Upload timeout for {filename}")
+        logger.info(f"Successfully uploaded {filename} directly")
         return {
-            "success": False,
-            "error": "Upload timeout - file may be too large"
+            "success": True,
+            "file_id": result["file_id"],
+            "version_id": result["version_id"],
+            "file_size": result["file_size"],
+            "fragments_stored": result["fragments_stored"]
         }
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Upload error for {filename}: {e}")
+            
+    except HTTPException as e:
+        logger.error(f"Upload failed for {filename}: {e.detail}")
         return {
             "success": False,
-            "error": f"Upload request failed: {str(e)}"
+            "error": e.detail
         }
     except Exception as e:
         logger.error(f"Unexpected error uploading {filename}: {e}")
@@ -318,35 +301,37 @@ async def upload_folder(
     upload_data: FolderUploadRequest,
     request: Request,
     current_account = Depends(get_current_account),
-    token: str = Depends(oauth2_scheme)
+    token: str = Depends(oauth2_scheme),
+    master_db: MasterNodeDB = Depends(get_master_db)
 ):
     """
     Upload an entire folder with its structure to distributed storage.
     
-    This endpoint uses your existing endpoints:
-    1. POST /api/folders - Creates each folder in the hierarchy
-    2. POST /api/files/upload - Uploads each file with erasure coding
+    This endpoint:
+    1. Creates folder hierarchy using direct database calls (fast!)
+    2. Uploads each file using existing upload endpoint with erasure coding
     
     Benefits:
-    - Zero code duplication
-    - Uses all existing validation and logic
-    - Easy to maintain
+    - No circular HTTP dependencies
+    - Fast folder creation via direct DB access
+    - Reuses file upload logic for storage distribution
     """
     try:
         account_id = current_account["account_id"]
         
-        # Extract token string for API calls
+        # Extract token string for file upload API calls
         token_str = token.credentials if hasattr(token, "credentials") else token
         
         logger.info(f"Starting folder upload: {upload_data.folder_name} with {len(upload_data.files)} files for account {account_id}")
         
-        # Step 1: Create folder structure using existing /folders endpoint
+        # Step 1: Create folder structure using direct database calls (FAST!)
         try:
-            folder_map = await create_folder_structure_via_endpoints(
+            folder_map = create_folder_structure_direct(
                 root_folder_name=upload_data.folder_name,
                 files=upload_data.files,
                 parent_folder_id=upload_data.parent_folder_id,
-                token=token_str
+                account_id=account_id,
+                master_db=master_db
             )
             
             root_folder_id = folder_map[upload_data.folder_name]
@@ -379,14 +364,14 @@ async def upload_folder(
                 
                 logger.info(f"Uploading {file_data.relative_path} to folder {folder_id}")
                 
-                # Call existing upload endpoint
-                result = await upload_file_via_existing_endpoint(
+                # Call upload logic directly (no HTTP overhead!)
+                result = upload_file_direct(
                     filename=file_data.filename,
                     file_data_base64=file_data.data,  # Pass as-is (already base64)
                     folder_id=folder_id,
                     erasure_id=upload_data.erasure_id,
                     content_type=file_data.content_type,
-                    token=token_str
+                    account_id=account_id
                 )
                 
                 if result["success"]:

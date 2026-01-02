@@ -11,6 +11,7 @@ import base64
 from app.core.security import decode_access_token
 from app.routes.login import oauth2_scheme
 from app.master_node_db import MasterNodeDB, get_master_db
+from app.routes.download_files import process_file_download
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,44 @@ FASTAPI_INTERNAL_URL = os.getenv("FASTAPI_INTERNAL_URL", "http://localhost:8000"
 
 
 # ===== HELPER FUNCTIONS =====
+
+async def download_single_file_direct(
+    file_id: str,
+    account_id: str
+) -> Dict:
+    """
+    Download a single file by calling download logic directly (no HTTP overhead).
+    Returns file data in base64 encoding.
+    """
+    try:
+        # Call download logic directly
+        file_data = await process_file_download(file_id, account_id)
+        
+        logger.info(f"Downloaded file {file_id}: {len(file_data)} bytes")
+        return {
+            "success": True,
+            "data": base64.b64encode(file_data).decode()
+        }
+    except HTTPException as e:
+        if e.status_code == 403:
+            logger.error(f"Access denied for file: {file_id}")
+            return {
+                "success": False,
+                "error": "Access denied"
+            }
+        else:
+            logger.error(f"Failed to download file {file_id}: {e.detail}")
+            return {
+                "success": False,
+                "error": e.detail
+            }
+    except Exception as e:
+        logger.error(f"Error downloading file {file_id}: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
 
 def get_current_account(
     token=Depends(oauth2_scheme),
@@ -154,11 +193,11 @@ async def download_single_file_via_endpoint(file_id: str, token: str) -> Dict:
     """
     try:
         response = requests.get(
-            f"{FASTAPI_INTERNAL_URL}/api/files/download/{file_id}",
+            f"{FASTAPI_INTERNAL_URL}/files/download/{file_id}",
             headers={
                 "Authorization": f"Bearer {token}"
             },
-            timeout=300  # 5 minute timeout for large files
+            timeout=600  # 10 minute timeout for large files
         )
         
         if response.status_code == 200:
@@ -209,8 +248,7 @@ async def download_single_file_via_endpoint(file_id: str, token: str) -> Dict:
 async def download_folder_as_zip(
     folder_id: str,
     current_account = Depends(get_current_account),
-    master_db: MasterNodeDB = Depends(get_master_db),
-    token: str = Depends(oauth2_scheme)
+    master_db: MasterNodeDB = Depends(get_master_db)
 ):
     """
     Download an entire folder as a ZIP file.
@@ -219,13 +257,12 @@ async def download_folder_as_zip(
     This endpoint:
     1. Gets folder hierarchy recursively from database
     2. Gets all files in those folders
-    3. Downloads each file using GET /api/files/download/{file_id}
+    3. Downloads each file using direct function call (fast!)
     4. Packages everything into a single ZIP file
     5. Returns ZIP for user to download
     """
     try:
         account_id = current_account.get("account_id") or current_account.get("ACCOUNT_ID")
-        token_str = token.credentials if hasattr(token, "credentials") else token
         
         logger.info(f"Downloading folder {folder_id} as ZIP for account {account_id}")
         
@@ -253,11 +290,11 @@ async def download_folder_as_zip(
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for file_meta in files:
                 try:
-                    # Download file data using existing endpoint
+                    # Download file data using direct function call (fast!)
                     logger.info(f"Downloading file: {file_meta['file_name']}")
-                    result = await download_single_file_via_endpoint(
-                        file_meta['file_id'],
-                        token_str
+                    result = await download_single_file_direct(
+                        file_id=file_meta['file_id'],
+                        account_id=account_id
                     )
                     
                     if result["success"]:

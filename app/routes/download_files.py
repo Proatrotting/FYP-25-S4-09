@@ -97,128 +97,135 @@ async def list_files(current_account = Depends(get_current_account)):
             detail=f"Master node unavailable: {str(e)}"
         )
 
+async def process_file_download(
+    file_id: str,
+    account_id: str
+) -> bytes:
+    """
+    Core file download logic that can be called directly without HTTP overhead.
+    Returns reconstructed file data as bytes.
+    """
+    # Get file info to verify ownership
+    async with httpx.AsyncClient() as client:
+        file_info_response = await client.get(f"{MASTER_NODE_URL}/files/info/{file_id}")
+    
+    if file_info_response.status_code == 404:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    if file_info_response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve file info: {file_info_response.text}"
+        )
+    
+    file_info = file_info_response.json()["file"]
+    
+    # Check if user owns this file
+    if file_info["account_id"] != account_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get fragment information
+    async with httpx.AsyncClient() as client:
+        fragments_response = await client.get(f"{MASTER_NODE_URL}/fragments/{file_id}")
+    
+    if fragments_response.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve fragments: {fragments_response.text}"
+        )
+    
+    fragments = fragments_response.json()
+    
+    if not fragments:
+        raise HTTPException(status_code=404, detail="File fragments not found")
+    
+    # Initialize erasure decoder
+    try:
+        erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
+        logger.info(f"Using file's original Reed-Solomon profile {file_info['erasure_id']} for download")
+    except Exception as e:
+        logger.error(f"Failed to initialize erasure decoder: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize erasure decoder: {str(e)}"
+        )
+    
+    # Download available fragments from storage nodes
+    available_fragments = []
+    fragment_indexes = []
+    sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+    
+    logger.info(f"Attempting to download {len(sorted_fragments)} fragments for file {file_id}")
+    
+    async with httpx.AsyncClient() as client:
+        for fragment in sorted_fragments:
+            if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                logger.warning(f"Fragment missing required fields: {fragment}")
+                continue
+                
+            node_endpoint = fragment["api_endpoint"]
+            storage_url = node_endpoint
+            fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
+            
+            logger.info(f"Requesting fragment {fragment['num_fragment']} from {fragment_url}")
+            
+            try:
+                frag_response = await client.get(fragment_url, timeout=30)
+                if frag_response.status_code == 200:
+                    fragment_data = frag_response.json()
+                    if fragment_data.get("success") and fragment_data.get("data"):
+                        decoded_data = base64.b64decode(fragment_data["data"])
+                        available_fragments.append(decoded_data)
+                        fragment_indexes.append(fragment["num_fragment"])
+                        logger.info(f"Successfully retrieved fragment {fragment['num_fragment']} ({len(decoded_data)} bytes)")
+                    else:
+                        logger.warning(f"Storage node returned empty data for fragment {fragment['fragment_id']}")
+                else:
+                    logger.warning(f"Storage node failed to retrieve fragment {fragment['fragment_id']}: {frag_response.status_code}")
+            except httpx.RequestError as e:
+                logger.warning(f"Failed to fetch fragment {fragment['fragment_id']} from {fragment_url}: {e}")
+                continue
+    
+    # Check if we have enough fragments
+    logger.info(f"Retrieved {len(available_fragments)} fragments out of {len(sorted_fragments)} total fragments")
+    
+    if not erasure_coder.can_reconstruct(len(available_fragments)):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}"
+        )
+    
+    # Reconstruct original file using Reed-Solomon decoding
+    try:
+        reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+        
+        # Truncate to original file size
+        original_file_size = int(file_info["file_size"])
+        if len(reconstructed_data) > original_file_size:
+            reconstructed_data = reconstructed_data[:original_file_size]
+            logger.info(f"Truncated reconstructed data to original size: {original_file_size} bytes")
+        
+        logger.info(f"Successfully reconstructed {len(reconstructed_data)} bytes using {len(available_fragments)} fragments")
+        return reconstructed_data
+    except Exception as e:
+        logger.error(f"Reed-Solomon reconstruction failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"File reconstruction failed: {str(e)}"
+        )
+
+
 @router.get("/download/{file_id}")
 async def download_file(file_id: str, current_account = Depends(get_current_account)):
     """Download a file by ID."""
     try:
-        # Get file info to verify ownership
+        account_id = current_account["account_id"]
+        reconstructed_data = await process_file_download(file_id, account_id)
+        
+        # Get file info for filename
         async with httpx.AsyncClient() as client:
             file_info_response = await client.get(f"{MASTER_NODE_URL}/files/info/{file_id}")
-        
-        if file_info_response.status_code == 404:
-            raise HTTPException(status_code=404, detail="File not found")
-        
-        if file_info_response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve file info: {file_info_response.text}"
-            )
-        
         file_info = file_info_response.json()["file"]
-        
-        # Check if user owns this file
-        if file_info["account_id"] != current_account["account_id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
-        
-        # Get fragment information
-        async with httpx.AsyncClient() as client:
-            fragments_response = await client.get(f"{MASTER_NODE_URL}/fragments/{file_id}")
-        
-        if fragments_response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve fragments: {fragments_response.text}"
-            )
-        
-        fragments = fragments_response.json()
-        
-        if not fragments:
-            raise HTTPException(status_code=404, detail="File fragments not found")
-        
-        # Initialize erasure decoder
-        try:
-            # For downloads, always use the file's original erasure profile to ensure proper reconstruction
-            # Account preferences only apply to new uploads, not existing file downloads
-            erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
-            logger.info(f"Using file's original Reed-Solomon profile {file_info['erasure_id']} for download")
-            logger.info(f"Reed-Solomon decoder initialized: k={erasure_coder.k}, m={erasure_coder.m}")
-        except Exception as e:
-            logger.error(f"Failed to initialize erasure decoder: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to initialize erasure decoder: {str(e)}"
-            )
-        
-        # Download available fragments from storage nodes directly
-        available_fragments = []
-        fragment_indexes = []
-        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-        
-        logger.info(f"Attempting to download {len(sorted_fragments)} fragments for file {file_id}")
-        
-        # Download fragments directly from storage nodes
-        async with httpx.AsyncClient() as client:
-            for fragment in sorted_fragments:
-                if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                    logger.warning(f"Fragment missing required fields: {fragment}")
-                    continue
-                    
-                # Use internal Docker network addresses for storage nodes
-                node_endpoint = fragment["api_endpoint"]
-                # Since we're running inside Docker, use the internal network address directly
-                storage_url = node_endpoint
-                
-                # Request fragment data from storage node
-                fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
-                
-                logger.info(f"Requesting fragment {fragment['num_fragment']} from {fragment_url}")
-                
-                try:
-                    frag_response = await client.get(fragment_url, timeout=30)
-                    if frag_response.status_code == 200:
-                        # Parse JSON response from storage node
-                        fragment_data = frag_response.json()
-                        if fragment_data.get("success") and fragment_data.get("data"):
-                            # Decode base64 fragment data
-                            decoded_data = base64.b64decode(fragment_data["data"])
-                            available_fragments.append(decoded_data)
-                            fragment_indexes.append(fragment["num_fragment"])
-                            logger.info(f"Successfully retrieved fragment {fragment['num_fragment']} ({len(decoded_data)} bytes)")
-                        else:
-                            logger.warning(f"Storage node returned empty data for fragment {fragment['fragment_id']}: {fragment_data}")
-                    else:
-                        logger.warning(f"Storage node failed to retrieve fragment {fragment['fragment_id']}: {frag_response.status_code} - {frag_response.text}")
-                except httpx.RequestError as e:
-                    logger.warning(f"Failed to fetch fragment {fragment['fragment_id']} from {fragment_url}: {e}")
-                    continue
-        
-        # Check if we have enough fragments for reconstruction
-        logger.info(f"Retrieved {len(available_fragments)} fragments out of {len(sorted_fragments)} total fragments")
-        logger.info(f"Fragment indexes: {fragment_indexes}")
-        
-        if not erasure_coder.can_reconstruct(len(available_fragments)):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}"
-            )
-        
-        # Reconstruct original file using Reed-Solomon decoding
-        try:
-            reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-            
-            # Truncate to original file size to remove any padding artifacts
-            original_file_size = int(file_info["file_size"])
-            if len(reconstructed_data) > original_file_size:
-                reconstructed_data = reconstructed_data[:original_file_size]
-                logger.info(f"Truncated reconstructed data to original size: {original_file_size} bytes")
-            
-            logger.info(f"Successfully reconstructed {len(reconstructed_data)} bytes using {len(available_fragments)} fragments")
-        except Exception as e:
-            logger.error(f"Reed-Solomon reconstruction failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"File reconstruction failed: {str(e)}"
-            )
         
         # Return file with proper headers
         return Response(

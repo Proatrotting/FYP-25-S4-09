@@ -98,6 +98,7 @@ services:
     environment:
       DATABASE_URL: postgresql://user:password@postgres_db:5432/database
       MASTER_NODE_URL: http://master_node:3000
+      FASTAPI_INTERNAL_URL: http://app:8000
       SECRET_KEY: your-secret-key-here
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 30

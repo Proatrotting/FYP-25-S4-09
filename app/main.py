@@ -18,6 +18,7 @@ from app.routes.search_folders_and_files import router as search_router
 from app.routes.file_sharing import router as file_sharing_router
 from app.routes.recycle_bin import router as recycle_bin_router
 from app.routes.upload_folders import router as upload_folders_router
+from app.routes.download_folders import router as download_folders_router
 from app.routes.sysadmin_account_management import router as sysadmin_account_management_router
 from app.routes.sysadmin_view_activity import router as sysadmin_view_activity_router
 # from app.routes.oneTimeDebugging import router as oneTimeDebugging_router
@@ -38,16 +39,16 @@ origins = [
     "http://localhost:8081",
     "http://127.0.0.1:8081",
     "https://fyp25s409-shard.vercel.app",
-    r"https://fyp25s409-shard-.*\.vercel\.app",
-    "*"  # Allow all origins for development
+    "https://fyp25s409-shard-git-cloud-variant-proatrottings-projects.vercel.app"
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-	allow_methods=["*"],		
+    allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"https://fyp25s409-shard.*\.vercel\.app"
 )
 
 # Include routers
@@ -68,6 +69,7 @@ app.include_router(search_router)
 app.include_router(file_sharing_router)
 app.include_router(recycle_bin_router)
 app.include_router(upload_folders_router)
+app.include_router(download_folders_router)
 app.include_router(sysadmin_account_management_router)
 app.include_router(sysadmin_view_activity_router)
 # app.include_router(oneTimeDebugging_router)
