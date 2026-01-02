@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
@@ -51,10 +51,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_origin_regex=r"https://fyp25s409-shard.*\.vercel\.app"
+    allow_origin_regex=r"https://.*\.vercel\.app"
 )
-
-app = FastAPI()
 
 # Include routers
 app.include_router(auth_router)
@@ -92,3 +90,10 @@ def healthz() -> dict:
 async def test_master_node_connection():
     """Test connection to master node database."""
     return {"status": "endpoint_working", "message": "Basic endpoint is functional"}
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    print(f"Origin: {request.headers.get('origin')}")
+    response = await call_next(request)
+    print(f"CORS headers: {response.headers.get('access-control-allow-origin')}")
+    return response
