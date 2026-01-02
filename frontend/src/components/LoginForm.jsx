@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { loginUser } from "../services/authService";
+import { loginUser, forgotPassword } from "../services/authService";
 import { setAccessToken, setCurrentUser } from "../services/UserService";
 import "../styles/LoginForm.css";
 
@@ -16,6 +16,12 @@ function LoginForm({ toggle }) {
   const [formMessage, setFormMessage] = useState(""); // only for form validation/login
   const [showSuccessAlert, setShowSuccessAlert] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // forgot password state
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   const navigate = useNavigate();
 
@@ -88,6 +94,29 @@ function LoginForm({ toggle }) {
     }
   };
 
+  const handleForgotSubmit = async (e) => {
+    e.preventDefault();
+    setForgotMessage("");
+
+    if (!forgotEmail || !isEmail(forgotEmail)) {
+      setForgotMessage("Please enter a valid email address.");
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const res = await forgotPassword(forgotEmail);
+      // Backend always returns a generic message
+      setForgotMessage(res.message || "If this email exists, a reset link has been sent.");
+      // Optionally clear field
+      // setForgotEmail("");
+    } catch (err) {
+      setForgotMessage(err.message || "Failed to process password reset.");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
   return (
     <div className="popup">
       <div className="popup-inner">
@@ -128,7 +157,37 @@ function LoginForm({ toggle }) {
             {loading ? "Logging in..." : "Login"}
           </button>
           {formMessage && <p className="response">{formMessage}</p>}
+
+          {/* Forgot password trigger */}
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setShowForgot(prev => !prev)}
+          >
+            {showForgot ? "Hide forgot password" : "Forgot Password?"}
+          </button>
+
+          {formMessage && <p className="response">{formMessage}</p>}
         </form>
+
+        {/* Forgot password mini-form */}
+        {showForgot && (
+          <form onSubmit={handleForgotSubmit} className="forgot-form">
+            <label>
+              Enter your email:
+              <input
+                type="email"
+                value={forgotEmail}
+                onChange={e => setForgotEmail(e.target.value)}
+                placeholder="your-email@example.com"
+              />
+            </label>
+            <button type="submit" disabled={forgotLoading}>
+              {forgotLoading ? "Sending..." : "Send reset link"}
+            </button>
+            {forgotMessage && <p className="response">{forgotMessage}</p>}
+          </form>
+        )} 
         <button type="button" className="close-btn" onClick={toggle}>
           Close
         </button>

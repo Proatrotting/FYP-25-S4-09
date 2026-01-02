@@ -166,3 +166,16 @@
     font-size: 1rem;
   }
 }
+
+.nav-item a {
+  text-decoration: none;
+  color: inherit;
+}
+
+.nav-item a:link,
+.nav-item a:visited,
+.nav-item a:hover,
+.nav-item a:active {
+  text-decoration: none;
+  color: inherit;
+}

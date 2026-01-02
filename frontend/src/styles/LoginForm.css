@@ -161,6 +161,28 @@
   transform: translateY(-1px) scale(1.03);
 }
 
+.link-button {
+  margin-top: 8px;
+  background: none;
+  border: none;
+  color: #007bff;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.link-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.forgot-form {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* Responsive tweaks */
 @media (max-width: 600px) {
   .popup-inner {
