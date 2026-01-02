@@ -21,6 +21,9 @@ from app.routes.upload_folders import router as upload_folders_router
 from app.routes.download_folders import router as download_folders_router
 from app.routes.sysadmin_account_management import router as sysadmin_account_management_router
 from app.routes.sysadmin_view_activity import router as sysadmin_view_activity_router
+from app.routes.account_inspect import router as account_inspect_router # Testing route
+from app.routes.add_status_column import router as add_status_column_router # Testing route
+
 # from app.routes.oneTimeDebugging import router as oneTimeDebugging_router
 
 # Get maximum request size from environment variable (default 200MB)
@@ -51,6 +54,8 @@ app.add_middleware(
     allow_origin_regex=r"https://fyp25s409-shard.*\.vercel\.app"
 )
 
+app = FastAPI()
+
 # Include routers
 app.include_router(auth_router)
 app.include_router(userprofiles_router)
@@ -73,6 +78,9 @@ app.include_router(download_folders_router)
 app.include_router(sysadmin_account_management_router)
 app.include_router(sysadmin_view_activity_router)
 # app.include_router(oneTimeDebugging_router)
+app.include_router(account_inspect_router) # Testing route
+app.include_router(add_status_column_router) # Testing route
+
 
 # Health check
 @app.get("/healthz")

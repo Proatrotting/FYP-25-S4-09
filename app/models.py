@@ -17,6 +17,7 @@ class Account(Base):
     password_hash = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     account_type = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False, default="ACTIVE")
 
     __table_args__ = (
         CheckConstraint("account_type IN ('FREE', 'PAID', 'SYSADMIN')", name="check_account_type"),
