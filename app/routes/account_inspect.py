@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session, text
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import Account  
 
