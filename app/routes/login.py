@@ -49,7 +49,7 @@ def get_account_by_username_or_email_master_node(master_db: MasterNodeDB, userna
 
     # Try username first
     query_username = """
-        SELECT account_id, username, email, password_hash, account_type, created_at
+        SELECT account_id, username, email, password_hash, account_type, status, created_at
         FROM account
         WHERE username = $1
     """
@@ -59,7 +59,7 @@ def get_account_by_username_or_email_master_node(master_db: MasterNodeDB, userna
 
     # If no result by username, try email
     query_email = """
-        SELECT account_id, username, email, password_hash, account_type, created_at
+        SELECT account_id, username, email, password_hash, account_type, status, created_at
         FROM account
         WHERE email = $1
     """
@@ -72,119 +72,149 @@ def get_account_by_username_or_email_master_node(master_db: MasterNodeDB, userna
 
 @router.post("/login", response_model=TokenResponse)
 def login(
-	login_data: LoginRequest, 
-	request: Request,
-	master_db: MasterNodeDB = Depends(get_master_db)
+    login_data: LoginRequest,
+    request: Request,
+    master_db: MasterNodeDB = Depends(get_master_db)
 ):
-	"""
-	Login endpoint using master node database (PostgreSQL). Accepts username/email and password.
-	Returns JWT access token on successful authentication.
-	The system automatically determines the account type (FREE, PAID, or SYSADMIN) and redirects accordingly.
-	"""
-	try:
-		# Find account by username or email from master node (PostgreSQL)
-		try:
-			account = get_account_by_username_or_email_master_node(master_db, login_data.username_or_email)
-		except Exception as e:
-			# Log the error for debugging
-			logger.error(f"Error querying master node for login: {str(e)}")
-			logger.error(f"Traceback: {traceback.format_exc()}")
-			raise HTTPException(
-				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-				detail=f"Database service unavailable. Please check if master node is running. Error: {str(e)}"
-			)
-		
-		if not account:
-			raise HTTPException(
-				status_code=status.HTTP_401_UNAUTHORIZED,
-				detail="Incorrect username/email or password",
-			)
-		
-		# Verify password
-		if not verify_password(login_data.password, account["password_hash"]):
-			raise HTTPException(
-				status_code=status.HTTP_401_UNAUTHORIZED,
-				detail="Incorrect username/email or password",
-			)
-		
-		# Get account type (default to 'FREE' if None)
-		account_type = account.get("account_type", "FREE")
-		
-		# Validate account_id is a valid UUID string
-		account_id = account.get("account_id")
-		if not account_id:
-			raise HTTPException(
-				status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-				detail="Invalid account data: missing account_id"
-			)
-		
-		# Convert account_id to UUID if it's a string
-		try:
-			if isinstance(account_id, str):
-				account_id_uuid = uuid.UUID(account_id)
-			else:
-				account_id_uuid = account_id
-		except (ValueError, AttributeError) as e:
-			logger.error(f"Invalid account_id format: {account_id}, error: {str(e)}")
-			raise HTTPException(
-				status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-				detail=f"Invalid account data: account_id format error"
-			)
-		
-		# Create access token
-		access_token = create_access_token(
-			data={"sub": str(account_id_uuid), "username": account["username"]}
-		)
-		
-		# Log login activity via Master Node
-		try:
-			login_log_sql = """
-				INSERT INTO activity_log (activity_id, account_id, action_type, resource_type, resource_id, ip_address, user_agent, details, created_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-			"""
-			log_details = f'{{"username": "{account["username"]}", "account_type": "{account_type}"}}'
-			master_db.execute(login_log_sql, [
-				str(uuid.uuid4()), 
-				str(account_id_uuid), 
-				"LOGIN", 
-				"ACCOUNT", 
-				str(account_id_uuid),
-				request.client.host if request.client else "unknown",
-				request.headers.get("user-agent", "unknown"),
-				log_details
-			])
-		except Exception as e:
-			# Log activity logging errors but don't fail the login
-			logger.warning(f"Failed to log login activity: {str(e)}")
-		
-		return TokenResponse(
-			access_token=access_token,
-			token_type="bearer",
-			account_id=str(account_id_uuid),
-			username=account["username"],
-			account_type=account_type
-		)
-		
-	except HTTPException:
-		# Re-raise HTTP exceptions as-is
-		raise
-	except Exception as e:
-		# Log the full error for debugging
-		error_msg = str(e)
-		logger.error(f"Login error: {error_msg}")
-		logger.error(f"Traceback: {traceback.format_exc()}")
-		
-		# Return more detailed error in development, generic in production
-		import os
-		if os.getenv("DEBUG", "false").lower() == "true" or os.getenv("TESTING") == "1":
-			detail = f"Internal server error during login: {error_msg}"
-		else:
-			detail = "Internal server error during login. Please check server logs."
-		
-		raise HTTPException(
-			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-			detail=detail
-		)
+    """
+    Login endpoint using master node database (PostgreSQL). Accepts username/email and password.
+    Returns JWT access token on successful authentication.
+    The system automatically determines the account type (FREE, PAID, or SYSADMIN) and redirects accordingly.
+    """
+    try:
+        # Find account by username or email from master node (PostgreSQL)
+        try:
+            account = get_account_by_username_or_email_master_node(
+                master_db, login_data.username_or_email
+            )
+        except Exception as e:
+            # Log the error for debugging
+            logger.error(f"Error querying master node for login: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Database service unavailable. Please check if master node is running. "
+                    f"Error: {str(e)}"
+                ),
+            )
+
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username/email or password",
+            )
+
+        # Block inactive accounts
+        account_status = account.get("status", "ACTIVE")
+        if account_status != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is deactivated. Please contact support or an administrator.",
+            )
+
+        # Verify password
+        if not verify_password(login_data.password, account["password_hash"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username/email or password",
+            )
+
+        # Get account type (default to 'FREE' if None)
+        account_type = account.get("account_type", "FREE")
+
+        # Validate account_id is a valid UUID string
+        account_id = account.get("account_id")
+        if not account_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid account data: missing account_id",
+            )
+
+        # Convert account_id to UUID if it's a string
+        try:
+            if isinstance(account_id, str):
+                account_id_uuid = uuid.UUID(account_id)
+            else:
+                account_id_uuid = account_id
+        except (ValueError, AttributeError) as e:
+            logger.error(f"Invalid account_id format: {account_id}, error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid account data: account_id format error",
+            )
+
+        # Create access token
+        access_token = create_access_token(
+            data={"sub": str(account_id_uuid), "username": account["username"]}
+        )
+
+        # Log login activity via Master Node
+        try:
+            login_log_sql = """
+                INSERT INTO activity_log (
+                    activity_id,
+                    account_id,
+                    action_type,
+                    resource_type,
+                    resource_id,
+                    ip_address,
+                    user_agent,
+                    details,
+                    created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            """
+            log_details = (
+                f'{{"username": "{account["username"]}", '
+                f'"account_type": "{account_type}"}}'
+            )
+            master_db.execute(
+                login_log_sql,
+                [
+                    str(uuid.uuid4()),
+                    str(account_id_uuid),
+                    "LOGIN",
+                    "ACCOUNT",
+                    str(account_id_uuid),
+                    request.client.host if request.client else "unknown",
+                    request.headers.get("user-agent", "unknown"),
+                    log_details,
+                ],
+            )
+        except Exception as e:
+            # Log activity logging errors but don't fail the login
+            logger.warning(f"Failed to log login activity: {str(e)}")
+
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            account_id=str(account_id_uuid),
+            username=account["username"],
+            account_type=account_type,
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Log the full error for debugging
+        error_msg = str(e)
+        logger.error(f"Login error: {error_msg}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+
+        # Return more detailed error in development, generic in production
+        import os
+
+        if os.getenv("DEBUG", "false").lower() == "true" or os.getenv("TESTING") == "1":
+            detail = f"Internal server error during login: {error_msg}"
+        else:
+            detail = "Internal server error during login. Please check server logs."
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=detail,
+        )
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
