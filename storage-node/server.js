@@ -44,13 +44,17 @@ const MASTER_NODE_HOST = process.env.MASTER_NODE_HOST || 'master_node';
 const MASTER_NODE_PORT = process.env.MASTER_NODE_PORT || 3000;
 const MASTER_NODE_URL = `http://${MASTER_NODE_HOST}:${MASTER_NODE_PORT}`;
 
-const NODE_ID = uuidv4();
-const NODE_PORT = process.env.NODE_PORT || 3000;
-const NODE_ROLE = process.env.NODE_ROLE || 'STORAGE';
-
 // Get container IP for registration - THIS IS THE KEY FIX!
 const CONTAINER_IP = getContainerIP();
-const NODE_HOSTNAME = CONTAINER_IP || process.env.NODE_HOSTNAME || `storage-node-${NODE_ID.slice(0, 8)}`;
+// CRITICAL FIX: Use NODE_HOSTNAME env var FIRST, fallback to IP, then UUID
+const NODE_HOSTNAME = process.env.NODE_HOSTNAME || CONTAINER_IP || `storage-node-${uuidv4().slice(0, 8)}`;
+
+// CRITICAL FIX: Use hostname as NODE_ID to prevent duplicate registrations on restart
+// This ensures the same physical node always has the same ID
+const NODE_ID = process.env.NODE_ID || NODE_HOSTNAME;
+
+const NODE_PORT = process.env.NODE_PORT || 3000;
+const NODE_ROLE = process.env.NODE_ROLE || 'STORAGE';
 
 // Use a logical objects folder for fragment objects. This makes addresses
 // portable and easier to migrate to object storage later.
@@ -90,14 +94,15 @@ async function registerWithMaster(){
 
 async function heartbeat(){
     try{
-        const initTime = Date.now();
-        const latency = Date.now() - initTime;
+        const startTime = Date.now();
         
         const response = await axios.post(`${MASTER_NODE_URL}/node-heartbeat`, {
             nodeId: NODE_ID,
-            latency: latency
+            latency: 0  // Will be calculated on return
         });
 
+        const latency = Date.now() - startTime;  // Actual round-trip time
+        
         if (response.data.success) {
             console.log('Heartbeat sent for storage node', NODE_ID);
             console.log('Heartbeat latency (ms):', latency);

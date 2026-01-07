@@ -114,6 +114,62 @@ services:
       master_node:
         condition: service_healthy
 
+  # Repair Worker
+  repair-worker:
+    image: fyp-25-s4-09-fastapi
+    container_name: repair_worker
+    command: python /workspace/repair_worker.py
+    environment:
+      MASTER_NODE_URL: http://master_node:3000
+      REPAIR_INTERVAL: 60
+      MAX_CONCURRENT_REPAIRS: 3
+      WORKER_ID: repair-worker-1
+      POSTGRES_HOST: postgres_db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: database
+    volumes:
+      - ./repair_worker.py:/workspace/repair_worker.py
+      - ./app:/workspace/app
+    networks:
+      - public_network
+      - storage_internal
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      master_node:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Heartbeat Monitor
+  heartbeat-monitor:
+    image: fyp-25-s4-09-fastapi
+    container_name: heartbeat_monitor
+    command: python /workspace/heartbeat_monitor.py
+    environment:
+      MASTER_NODE_URL: http://master_node:3000
+      HEARTBEAT_CHECK_INTERVAL: 30
+      HEARTBEAT_TIMEOUT: 45
+      MONITOR_ID: heartbeat-monitor-1
+      POSTGRES_HOST: postgres_db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: database
+    volumes:
+      - ./heartbeat_monitor.py:/workspace/heartbeat_monitor.py
+      - ./app:/workspace/app
+    networks:
+      - public_network
+      - storage_internal
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      master_node:
+        condition: service_healthy
+    restart: unless-stopped
+
   # Storage Nodes (1-12: Distributed storage infrastructure)
   storage_node_1:
     <<: *storage-node-template

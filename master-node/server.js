@@ -387,6 +387,21 @@ app.post('/node-heartbeat', async (req, res) => {
     }
 });
 
+// Cleanup old heartbeat records (runs every hour, keeps last 24 hours)
+setInterval(async () => {
+    try {
+        const result = await query(`
+            DELETE FROM node_heartbeat 
+            WHERE heartbeat_at < NOW() - INTERVAL '24 hours'
+        `);
+        if (result.rowCount > 0) {
+            console.log(`Cleaned up ${result.rowCount} old heartbeat records`);
+        }
+    } catch (error) {
+        console.error('Error cleaning up heartbeats:', error);
+    }
+}, 3600000); // Run every hour
+
 // Storage nodes update their capacity
 app.post('/update-capacity', async (req, res) => {
     try {
@@ -1030,6 +1045,62 @@ app.get('/files/info/:fileId', async (req, res) => {
     } catch (error) {
         console.error('Error retrieving file info:', error);
         res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+});
+
+// Create repair job
+app.post('/repair-jobs', async (req, res) => {
+    try {
+        const { version_id, reason, priority, fragments_needed, fragments_available } = req.body;
+        
+        if (!version_id) {
+            return res.status(400).json({ error: 'version_id is required' });
+        }
+        
+        // Check if repair job already exists
+        const existingJob = await query(`
+            SELECT job_id FROM REPAIR_JOBS 
+            WHERE version_id = $1 
+            AND status IN ('PENDING', 'IN_PROGRESS')
+            LIMIT 1
+        `, [version_id]);
+        
+        if (existingJob.rows.length > 0) {
+            return res.status(200).json({ 
+                message: 'Repair job already exists',
+                job_id: existingJob.rows[0].job_id,
+                created: false
+            });
+        }
+        
+        // Create new repair job
+        const job_id = uuidv4();
+        await query(`
+            INSERT INTO REPAIR_JOBS 
+            (JOB_ID, VERSION_ID, REASON, STATUS, PRIORITY, 
+             FRAGMENTS_NEEDED, FRAGMENTS_AVAILABLE, CREATED_AT, UPDATED_AT)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        `, [
+            job_id,
+            version_id,
+            reason || 'Lazy repair triggered',
+            'PENDING',
+            priority || 5,
+            fragments_needed || 0,
+            fragments_available || 0
+        ]);
+        
+        console.log(`✅ Created repair job ${job_id} for version ${version_id}`);
+        
+        res.status(201).json({ 
+            message: 'Repair job created successfully',
+            job_id: job_id,
+            created: true
+        });
+        
+    } catch (error) {
+        console.error('Error creating repair job:', error);
+        res.status(500).json({ error: 'Failed to create repair job', details: error.message });
     }
 });
 

@@ -1,22 +1,19 @@
 """
 Erasure Coding utilities for distributed file storage.
-Uses Reed-Solomon encoding for fault tolerance and data redundancy.
+Uses Reed-Solomon encoding with the reedsolo library for fault tolerance and data redundancy.
 """
 
 import reedsolo
-from typing import List, Tuple, Dict, Any
+from typing import List, Dict, Any
 import logging
-import hashlib
-import math
 import os
-import requests
 
 logger = logging.getLogger(__name__)
 
 MASTER_NODE_URL = os.getenv("MASTER_NODE_URL", "http://localhost:8000")
 
 class ErasureCoder:
-    """Handles erasure coding operations using Reed-Solomon encoding with reedsolo."""
+    """Handles erasure coding operations using Reed-Solomon encoding."""
     
     def __init__(self, k: int, m: int):
         """
@@ -26,80 +23,55 @@ class ErasureCoder:
             k: Number of data fragments
             m: Number of parity fragments
         """
-        self.k = k  # Data fragments
-        self.m = m  # Parity fragments
-        self.n = k + m  # Total fragments
+        self.k = k
+        self.m = m
+        self.n = k + m
         
-        # Use reedsolo for Reed-Solomon encoding
-        # Each fragment will be encoded with m parity symbols
+        # Initialize reedsolo Reed-Solomon encoder with m parity symbols
         self.rs = reedsolo.RSCodec(m)
         
-        logger.info(f"Initialized Reed-Solomon encoder with reedsolo: {k}+{m}={self.n} fragments")
+        logger.info(f"Initialized Reed-Solomon encoder: {k} data + {m} parity = {self.n} fragments")
     
     def encode_data(self, data: bytes) -> List[bytes]:
         """
-        Encode data into k+m erasure-coded fragments using Reed-Solomon.
-        
-        This creates k data fragments + m parity fragments for true erasure coding.
+        Encode data into k+m fragments using Reed-Solomon erasure coding.
         
         Args:
             data: Input data to encode
             
         Returns:
-            List of k+m fragments (first k are data fragments, last m are parity fragments)
+            List of n fragments where first k are data and last m are parity
         """
         try:
             if len(data) == 0:
                 raise ValueError("Cannot encode empty data")
             
-            # Split data into k roughly equal-sized data fragments
+            # Calculate chunk size and pad data to be divisible by k
             data_size = len(data)
-            fragment_size = data_size // self.k
-            remainder = data_size % self.k
+            chunk_size = (data_size + self.k - 1) // self.k
+            padded_size = chunk_size * self.k
+            padded_data = data + b'\x00' * (padded_size - data_size)
             
-            data_fragments = []
-            offset = 0
+            # Split into k data chunks
+            data_chunks = [padded_data[i*chunk_size:(i+1)*chunk_size] for i in range(self.k)]
             
-            # Create k data fragments
-            for i in range(self.k):
-                # Add one extra byte to the first 'remainder' fragments
-                current_size = fragment_size + (1 if i < remainder else 0)
-                fragment_data = data[offset:offset + current_size]
-                data_fragments.append(fragment_data)
-                offset += current_size
+            # Create n fragments (k data + m parity)
+            fragments = [bytearray(chunk_size) for _ in range(self.n)]
             
-            # Pad all fragments to the same size for Reed-Solomon matrix operations
-            max_fragment_size = max(len(f) for f in data_fragments)
-            padded_data_fragments = []
-            for fragment in data_fragments:
-                padded = fragment + b'\x00' * (max_fragment_size - len(fragment))
-                padded_data_fragments.append(padded)
-            
-            # Generate m parity fragments using Reed-Solomon matrix multiplication
-            parity_fragments = []
-            
-            # For each parity fragment, calculate it based on all data fragments
-            for p in range(self.m):
-                parity_data = bytearray(max_fragment_size)
+            # Encode each byte position using Reed-Solomon
+            for byte_pos in range(chunk_size):
+                # Collect this byte from each k data chunks
+                data_bytes = bytes([data_chunks[i][byte_pos] for i in range(self.k)])
                 
-                # Use Galois field arithmetic to generate parity
-                # This is a simplified parity calculation - in production you'd use proper GF(256) math
-                for pos in range(max_fragment_size):
-                    parity_byte = 0
-                    for d in range(self.k):
-                        if pos < len(padded_data_fragments[d]):
-                            # Simple XOR-based parity for now (can be enhanced with proper RS matrix)
-                            coefficient = (d + p + 1) % 256  # Simple coefficient generation
-                            parity_byte ^= padded_data_fragments[d][pos] ^ coefficient
-                    parity_data[pos] = parity_byte
+                # Encode with reedsolo (adds m parity bytes)
+                encoded_bytes = self.rs.encode(data_bytes)
                 
-                parity_fragments.append(bytes(parity_data))
+                # Distribute across fragments
+                for i in range(self.n):
+                    fragments[i][byte_pos] = encoded_bytes[i]
             
-            # Combine data fragments and parity fragments
-            all_fragments = data_fragments + parity_fragments
-            
-            logger.info(f"Reed-Solomon encoded {len(data)} bytes into {len(all_fragments)} fragments ({self.k} data + {self.m} parity)")
-            logger.debug(f"Fragment sizes: data={[len(f) for f in data_fragments]}, parity={[len(f) for f in parity_fragments]}")
+            all_fragments = [bytes(frag) for frag in fragments]
+            logger.info(f"Encoded {data_size} bytes into {self.n} fragments of {chunk_size} bytes each")
             
             return all_fragments
             
@@ -116,34 +88,49 @@ class ErasureCoder:
             fragment_indexes: Corresponding fragment indexes (0-based)
             
         Returns:
-            Reconstructed original data (may need truncation to original file size)
+            Reconstructed original data
         """
         try:
             if len(available_fragments) < self.k:
                 raise ValueError(f"Need at least {self.k} fragments to decode, got {len(available_fragments)}")
             
-            # Sort fragments by their index to maintain correct order
+            # Sort fragments by index
             indexed_fragments = list(zip(fragment_indexes, available_fragments))
-            indexed_fragments.sort(key=lambda x: x[0])  # Sort by fragment index
+            indexed_fragments.sort(key=lambda x: x[0])
             
-            # Get data fragments (first k fragments by index)
-            data_fragments = []
+            # Create full fragment array with None for missing fragments
+            all_fragments = [None] * self.n
+            for idx, frag in indexed_fragments:
+                all_fragments[idx] = frag
             
-            for idx, fragment in indexed_fragments:
-                if idx < self.k:  # Only data fragments (not parity)
-                    data_fragments.append(fragment)
-                if len(data_fragments) >= self.k:
-                    break
+            # Determine which fragments are missing
+            missing_indexes = [i for i in range(self.n) if all_fragments[i] is None]
             
-            # Sort data fragments by their original index to maintain order
-            if len(data_fragments) < self.k:
-                raise ValueError(f"Not enough data fragments available: need {self.k}, got {len(data_fragments)}")
+            # Get chunk size
+            chunk_size = len(available_fragments[0])
             
-            # Concatenate data fragments to reconstruct original data
-            # Note: This may include some padding that needs to be removed by caller
-            reconstructed_data = b''.join(data_fragments)
+            # Reconstruct data byte-by-byte using Reed-Solomon
+            reconstructed_chunks = []
+            for byte_pos in range(chunk_size):
+                # Extract this byte from all fragments
+                encoded_bytes = bytearray(self.n)
+                for i in range(self.n):
+                    if all_fragments[i] is not None:
+                        encoded_bytes[i] = all_fragments[i][byte_pos]
+                    else:
+                        encoded_bytes[i] = 0
+                
+                # Decode with erasure positions
+                decoded_result = self.rs.decode(bytes(encoded_bytes), erase_pos=missing_indexes)
+                
+                # Handle tuple return value from reedsolo
+                decoded_bytes = decoded_result[0] if isinstance(decoded_result, tuple) else decoded_result
+                
+                # Extract k data bytes
+                reconstructed_chunks.append(decoded_bytes[:self.k])
             
-            logger.debug(f"Decoded {len(reconstructed_data)} bytes from {len(available_fragments)} available fragments")
+            reconstructed_data = b''.join(reconstructed_chunks)
+            logger.debug(f"Decoded {len(reconstructed_data)} bytes from {len(available_fragments)} fragments")
             
             return reconstructed_data
             

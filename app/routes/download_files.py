@@ -10,6 +10,7 @@ from app.core.security import decode_access_token
 from app.routes.login import oauth2_scheme
 from app.core.config import get_settings
 from app.core.erasure_coding import get_erasure_coder_for_profile, get_erasure_coder_for_account
+from app.core.lazy_repair import LazyRepair
 import logging
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -187,8 +188,24 @@ async def process_file_download(
                 continue
     
     # Check if we have enough fragments
-    logger.info(f"Retrieved {len(available_fragments)} fragments out of {len(sorted_fragments)} total fragments")
+    logger.info(f"Retrieved {len(available_fragments)} of {len(sorted_fragments)} fragments")
     
+    # Lazy repair: create repair job if fragments are missing but reconstruction is possible
+    if len(available_fragments) < len(sorted_fragments) and erasure_coder.can_reconstruct(len(available_fragments)):
+        logger.warning(f"Triggering lazy repair: {len(available_fragments)}/{len(sorted_fragments)} fragments available")
+        try:
+            lazy_repair = LazyRepair()
+            version_id = file_info.get("version_id") or file_id
+            await lazy_repair.check_and_create_repair_job(
+                version_id=version_id,
+                total_fragments_expected=len(sorted_fragments),
+                fragments_available=len(available_fragments)
+            )
+        except Exception as repair_error:
+            logger.error(f"Lazy repair failed: {repair_error}")
+            # Don't fail the download if repair job creation fails
+    
+    # Verify we can reconstruct the file
     if not erasure_coder.can_reconstruct(len(available_fragments)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -216,7 +233,10 @@ async def process_file_download(
 
 
 @router.get("/download/{file_id}")
-async def download_file(file_id: str, current_account = Depends(get_current_account)):
+async def download_file(
+    file_id: str, 
+    current_account = Depends(get_current_account)
+):
     """Download a file by ID."""
     try:
         account_id = current_account["account_id"]

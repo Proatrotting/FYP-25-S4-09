@@ -89,6 +89,58 @@ services:
         delay: 10s
         max_attempts: 5
 
+  # Repair Worker
+  repair_worker:
+    image: aiess/fastapi-backend:latest
+    command: python /workspace/app/repair_worker.py
+    environment:
+      MASTER_NODE_URL: http://master_node:3000
+      REPAIR_INTERVAL: 60
+      MAX_CONCURRENT_REPAIRS: 3
+      WORKER_ID: repair-worker-1
+      POSTGRES_HOST: 34.143.181.179
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_DB: fyp-storage
+    networks:
+      - storage_network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
+  # Heartbeat Monitor
+  heartbeat_monitor:
+    image: aiess/fastapi-backend:latest
+    command: python /workspace/app/heartbeat_monitor.py
+    environment:
+      MASTER_NODE_URL: http://master_node:3000
+      HEARTBEAT_CHECK_INTERVAL: 30
+      HEARTBEAT_TIMEOUT: 45
+      MONITOR_ID: heartbeat-monitor-1
+      POSTGRES_HOST: 34.143.181.179
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_DB: fyp-storage
+    networks:
+      - storage_network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
 networks:
   storage_network:
     driver: overlay
