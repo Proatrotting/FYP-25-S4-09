@@ -18,6 +18,7 @@ class SysadminUser(BaseModel):
     username: str
     email: str
     account_type: str
+    status: str
     created_at: str
 
 
@@ -32,13 +33,16 @@ def list_all_users(
     account_type: Optional[str] = Query(
         None, description="Filter by account type (e.g. FREE, SYSADMIN)"
     ),
+    account_status: Optional[str] = Query(
+        None, description="Filter by account status (e.g. ACTIVE, INACTIVE)"
+    ),
     limit: int = Query(50, ge=1, le=200, description="Number of users to return"),
     offset: int = Query(0, ge=0, description="Number of users to skip"),
     master_db: MasterNodeDB = Depends(get_master_db),
     _: dict = Depends(require_sysadmin),
 ):
     sql = """
-        SELECT account_id, username, email, account_type, created_at
+        SELECT account_id, username, email, account_type, status, created_at
         FROM account
     """
     conditions = []
@@ -61,11 +65,10 @@ def list_all_users(
         params.append(account_type.upper())
         idx += 1
 
-    # If you add a status column later:
-    # if account_status:
-    #     conditions.append(f"status = ${idx}")
-    #     params.append(account_status.upper())
-    #     idx += 1
+    if account_status:
+         conditions.append(f"status = ${idx}")
+         params.append(account_status.upper())
+         idx += 1
 
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
@@ -89,6 +92,7 @@ def list_all_users(
                 username=r["username"],
                 email=r["email"],
                 account_type=r.get("account_type", "FREE"),
+                status=r.get("status", "ACTIVE"),
                 created_at=created_at_str,
             )
         )
@@ -128,22 +132,24 @@ def resolve_account_id(selector: AccountSelector, master_db: MasterNodeDB) -> st
 
 
 @router.post("/deactivate", status_code=200)
-@router.post("/deactivate", status_code=200)
 def deactivate_account(
     selector: AccountSelector,
     master_db: MasterNodeDB = Depends(get_master_db),
-    _: dict = Depends(require_sysadmin),  # <--- protect
+    _: dict = Depends(require_sysadmin),
 ):
-    """
-    Placeholder deactivate: currently just checks that the account exists.
-    Later you can change this to UPDATE a status column.
-    """
     account_id = resolve_account_id(selector, master_db)
 
+    # Set status to INACTIVE
+    master_db.execute(
+        "UPDATE account SET status = $1 WHERE account_id = $2",
+        ["INACTIVE", account_id],
+    )
+
     return {
-        "message": "Account exists (no status column yet)",
+        "message": "Account deactivated",
         "account_id": account_id,
     }
+
 
 
 @router.delete("", status_code=200)
@@ -177,3 +183,24 @@ def seed_sysadmin(
         ["SYSADMIN", username],
     )
     return {"message": "Sysadmin updated", "username": username}
+
+
+@router.post("/activate", status_code=200)
+def activate_account(
+    selector: AccountSelector,
+    master_db: MasterNodeDB = Depends(get_master_db),
+    _: dict = Depends(require_sysadmin),
+):
+    # Reuse your resolver to get the account_id
+    account_id = resolve_account_id(selector, master_db)
+
+    # Set status back to ACTIVE
+    master_db.execute(
+        "UPDATE account SET status = $1 WHERE account_id = $2",
+        ["ACTIVE", account_id],
+    )
+
+    return {
+        "message": "Account activated",
+        "account_id": account_id,
+    }
