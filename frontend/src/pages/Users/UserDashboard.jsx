@@ -6,7 +6,7 @@ import { createFolder, listFolders, moveFolder,
          getFileInfo, searchFilesAndFolders, moveFile,
          createFileShare,createFolderShare,
          searchShareUsers, shareFileWithUser,
-         binDeleteFile, binDeleteFolder, } from "../../services/UserService";
+         binDeleteFile, binDeleteFolder, uploadFolderApi} from "../../services/UserService";
 import { Tooltip } from "./Tooltip";
 
 const UserDashboard = () => {
@@ -38,6 +38,9 @@ const UserDashboard = () => {
   const [openMenuFileId, setOpenMenuFileId] = useState(null);
   const [openMenuType, setOpenMenuType] = useState(null); // "file" | "folder"
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+
+  const folderInputRef = useRef(null);
+  const [isUploadingFolder, setIsUploadingFolder] = useState(false);
 
   const toggleMenu = (id, type, event) => {
     setOpenMenuFileId((prev) => (prev === id ? null : id));
@@ -82,6 +85,46 @@ const UserDashboard = () => {
       setFolders(data);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleUploadFolderClick = () => {
+    if (folderInputRef.current) {
+      folderInputRef.current.value = ""; // allow reselect same folder
+      folderInputRef.current.click();
+    }
+  };
+
+  const handleFolderChange = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Derive folder name from first file's webkitRelativePath
+    const first = files[0];
+    let folderName = "New Folder";
+    if (first.webkitRelativePath) {
+      const parts = first.webkitRelativePath.split("/");
+      if (parts.length > 1) {
+        folderName = parts[0]; // top-level folder name
+      }
+    }
+
+    try {
+      setIsUploadingFolder(true);
+      const result = await uploadFolderApi({
+        folderName,
+        files,
+        parentFolderId: currentFolderId, // or null if you always upload at root
+        erasureId: erasureLevel,
+      });
+      console.log("Folder upload result:", result);
+      // Refresh listing after upload
+      await fetchFilesAndFolders(currentFolderId);
+    } catch (err) {
+      console.error("Failed to upload folder", err);
+      alert(err.message || "Failed to upload folder");
+    } finally {
+      setIsUploadingFolder(false);
     }
   };
 
@@ -603,6 +646,14 @@ const UserDashboard = () => {
             disabled={isLoading}
           >
             + Upload File
+          </button>
+          {/* NEW: Upload Folder button */}
+          <button
+            className="toolbar-action-btn"
+            onClick={handleUploadFolderClick}
+            disabled={isLoading || isUploadingFolder}
+          >
+            {isUploadingFolder ? "Uploading Folder..." : "+ Upload Folder"}
           </button>
         </div>
       </div>
