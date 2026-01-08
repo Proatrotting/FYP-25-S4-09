@@ -6,7 +6,8 @@ import { createFolder, listFolders, moveFolder,
          getFileInfo, searchFilesAndFolders, moveFile,
          createFileShare,createFolderShare,
          searchShareUsers, shareFileWithUser,
-         binDeleteFile, binDeleteFolder, uploadFolderApi} from "../../services/UserService";
+         binDeleteFile, binDeleteFolder, uploadFolderApi,
+         downloadFolderZip} from "../../services/UserService";
 import { Tooltip } from "./Tooltip";
 
 const UserDashboard = () => {
@@ -85,6 +86,15 @@ const UserDashboard = () => {
       setFolders(data);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleDownloadFolder = async (folder) => {
+    try {
+      await downloadFolderZip(folder.folder_id);
+    } catch (err) {
+      console.error("Failed to download folder", err);
+      alert(err.message || "Failed to download folder");
     }
   };
 
@@ -604,12 +614,23 @@ const UserDashboard = () => {
           >
             + Create Folder
           </button>
+          {/* Hidden file input for single/multi file upload */}
           <input
             type="file"
             ref={fileInputRef}
             style={{ display: "none" }}
             onChange={handleFileChange}
             multiple
+          />
+          {/* Hidden input for folder upload */}
+          <input
+            type="file"
+            ref={folderInputRef}
+            style={{ display: "none" }}
+            webkitdirectory="true"
+            directory=""
+            multiple
+            onChange={handleFolderChange}
           />
           {/* Erasure level selector */}
           <Tooltip
@@ -1033,6 +1054,19 @@ const UserDashboard = () => {
         >
           {openMenuType === "folder" && (
             <>
+              <button
+                type="button"
+                className="actions-menu-item"
+                onClick={() => {
+                  const folder = folders.find((f) => f.folder_id === openMenuFileId);
+                  if (!folder) return;
+                  closeMenu();
+                  handleDownloadFolder(folder);
+                }}
+              >
+                Download
+              </button>
+
               <button
                 type="button"
                 className="actions-menu-item"
