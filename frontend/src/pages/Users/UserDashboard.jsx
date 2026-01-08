@@ -128,8 +128,8 @@ const UserDashboard = () => {
         erasureId: erasureLevel,
       });
       console.log("Folder upload result:", result);
-      // Refresh listing after upload
-      await fetchFilesAndFolders(currentFolderId);
+      // refresh folders + files
+      await loadCurrentFolderData();
     } catch (err) {
       console.error("Failed to upload folder", err);
       alert(err.message || "Failed to upload folder");
