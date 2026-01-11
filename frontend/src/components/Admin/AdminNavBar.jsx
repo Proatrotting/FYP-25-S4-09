@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { getCurrentUser, clearAuth } from "../../services/UserService";
 import "../../styles/Admin/AdminNavBar.css";
 import ShardLogo from "../Shard_Logo.png";
