@@ -68,6 +68,105 @@ export async function authFetch(url, options = {}) {
   return response;
 }
 
+// ---------- Folder download ----------
+export async function downloadFolderZip(folderId) {
+  const url = `${API_BASE_URL}/files/download-folder/${folderId}`;
+
+  const response = await authFetch(url, {
+    method: "GET",
+    // IMPORTANT: do NOT set "Content-Type": "application/json" here;
+    // authFetch already sets JSON; we override below.
+    headers: {
+      // Remove/override JSON header for binary data
+    },
+  });
+
+  if (!response.ok) {
+    let errorText = "Failed to download folder";
+    try {
+      const errData = await response.json();
+      errorText = errData.detail || errData.message || errorText;
+    } catch {
+      // ignore JSON parse error for non-JSON responses
+    }
+    throw new Error(errorText);
+  }
+
+  // Get filename from Content-Disposition if present
+  const disposition = response.headers.get("Content-Disposition");
+  let filename = "folder.zip";
+  if (disposition) {
+    const match = disposition.match(
+      /filename\*?=['"]?(?:UTF-\d''|)([^;'"]+)['"]?/i
+    );
+    if (match && match[1]) {
+      filename = decodeURIComponent(match[1]);
+    }
+  }
+
+  const blob = await response.blob(); // ZIP binary [web:35][web:42][web:45]
+  const urlObject = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = urlObject;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(urlObject);
+}
+
+// ---------- Folder upload ----------
+export async function uploadFolderApi({ folderName, files, parentFolderId = null, erasureId = "MEDIUM" }) {
+  // files: FileList or array of File objects from an <input webkitdirectory>
+  if (!files || files.length === 0) {
+    throw new Error("No files selected");
+  }
+
+  // Build files array in backend's expected shape
+  const fileEntries = await Promise.all(
+    Array.from(files).map(async (file) => {
+      const arrayBuffer = await file.arrayBuffer();
+      const base64Data = btoa(
+        String.fromCharCode(...new Uint8Array(arrayBuffer))
+      );
+
+      // Use webkitRelativePath to get relative_path (fall back to file.name)
+      const relativePath =
+        file.webkitRelativePath && file.webkitRelativePath.length > 0
+          ? file.webkitRelativePath
+          : file.name;
+
+      return {
+        filename: file.name,
+        data: base64Data,
+        relative_path: relativePath, // matches backend model
+        content_type: file.type || "application/octet-stream",
+      };
+    })
+  );
+
+  const body = {
+    folder_name: folderName,
+    files: fileEntries,
+    parent_folder_id: parentFolderId,
+    erasure_id: erasureId,
+  };
+
+  const response = await authFetch(`${API_BASE_URL}/files/upload-folder`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(
+      result.detail || result.message || "Failed to upload folder"
+    );
+  }
+
+  return result; // FolderUploadResponse
+}
+
 // ---------- File upload ----------
 export async function uploadFile({ file, folderId = null, erasureId = "MEDIUM" }) {
   const toBase64 = (file) =>
