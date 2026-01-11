@@ -170,19 +170,61 @@ def delete_account(
 
     return {"message": "Account deleted", "account_id": account_id}
 
-@router.post("/_seed_sysadmin", status_code=200)
-def seed_sysadmin(
+@router.post("/_seed_first_sysadmin", status_code=200)
+def seed_first_sysadmin(
     username: str,
     master_db: MasterNodeDB = Depends(get_master_db),
 ):
     """
-    TEMP: Promote a user to SYSADMIN. Remove after use.
+    One-time: if no SYSADMIN exists, promote `username` to SYSADMIN.
+    After at least one SYSADMIN exists, this endpoint is disabled.
     """
+    # Check if any sysadmin already exists
+    rows = master_db.select(
+        "SELECT 1 FROM account WHERE account_type = 'SYSADMIN' LIMIT 1",
+        [],
+    )
+    if rows:
+        # Once a sysadmin exists, this endpoint is disabled
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sysadmin already seeded. Use authenticated sysadmin to promote others.",
+        )
+
+    # Ensure target user exists
+    user_rows = master_db.select(
+        "SELECT account_id FROM account WHERE username = $1",
+        [username],
+    )
+    if not user_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target user not found.",
+        )
+
     master_db.execute(
         "UPDATE account SET account_type = $1 WHERE username = $2",
         ["SYSADMIN", username],
     )
-    return {"message": "Sysadmin updated", "username": username}
+
+    return {"message": "Initial sysadmin seeded", "username": username}
+
+
+@router.post("/promote-to-sysadmin", status_code=200)
+def promote_to_sysadmin(
+    selector: AccountSelector,
+    master_db: MasterNodeDB = Depends(get_master_db),
+    _: dict = Depends(require_sysadmin),
+):
+    account_id = resolve_account_id(selector, master_db)
+    master_db.execute(
+        "UPDATE account SET account_type = $1 WHERE account_id = $2",
+        ["SYSADMIN", account_id],
+    )
+    return {
+        "message": "Account promoted to sysadmin",
+        "account_id": account_id,
+    }
 
 
 @router.post("/activate", status_code=200)
