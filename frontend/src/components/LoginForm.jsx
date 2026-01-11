@@ -78,7 +78,7 @@ function LoginForm({ toggle }) {
         setShowSuccessAlert(false);
         // Redirect based on actual account_type from backend response
         if (accountType === "SYSADMIN") {
-          navigate("/Admin/Admin-Dashboard");
+          navigate("/admin/dashboard");
         } else {
           // FREE and PAID both go to user dashboard
           navigate("/user-dashboard");

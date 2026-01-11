@@ -13,6 +13,10 @@ import AccountManagement from "./pages/Users/AccountManagementService";
 import Shared from "./pages/Users/Shared";
 import PublicSharePage from "./pages/Users/PublicSharePage";
 import Bin from "./pages/Users/Bin";
+import AdminLayout from "./components/Admin/AdminLayout";
+import Dashboard from "./pages/Admin/Dashboard";
+import ManageUsers from "./pages/Admin/ManageUsers";
+import Nodes from "./pages/Admin/Nodes";
 
 function App() {
   const [showLogin, setShowLogin] = useState(false);
@@ -73,7 +77,15 @@ function App() {
         <Route path="/users/bin" element={<UserLayout />}>
           <Route index element={<Bin />} />
         </Route>
-        </Routes>
+
+        {/* ADMIN USERS PAGES use AdminLayout (with AdminNavBar only) */}
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="users" element={<ManageUsers />} />
+          <Route path="nodes" element={<Nodes />} />
+        </Route>
+
+      </Routes>
 
       {/* Global modals */}
       {showLogin && <LoginForm toggle={toggleLogin} />}
