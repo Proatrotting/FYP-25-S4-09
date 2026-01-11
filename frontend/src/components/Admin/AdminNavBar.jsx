@@ -40,17 +40,17 @@ function AdminNavBar() {
         <span className="bar" />
       </button>
 
-      <ul className="admin-nav-links">
-        <li className={`admin-nav-item${location.pathname === "/admin/dashboard" ? " active" : ""}`} onClick={handleNavClick}>
-          <Link to="/admin/dashboard">Dashboard</Link>
-        </li>
-        <li className={`admin-nav-item${location.pathname === "/admin/users" ? " active" : ""}`} onClick={handleNavClick}>
-          <Link to="/admin/users">Manage Users</Link>
-        </li>
-        <li className={`admin-nav-item${location.pathname === "/admin/nodes" ? " active" : ""}`} onClick={handleNavClick}>
-          <Link to="/admin/nodes">Nodes</Link>
-        </li>
-      </ul>
+      <nav className="admin-nav-links" onClick={handleNavClick}>
+        <NavLink to="/admin/dashboard" className={({ isActive }) => "admin-nav-item" + (isActive ? " admin-nav-item.active" : "") } >
+            Dashboard
+        </NavLink>
+        <NavLink to="/admin/users" className={({ isActive }) => "admin-nav-item" + (isActive ? " admin-nav-item.active" : "") } >
+            Manage Users
+        </NavLink>
+        <NavLink to="/admin/nodes" className={({ isActive }) => "admin-nav-item" + (isActive ? " admin-nav-item.active" : "") } >
+            Nodes
+        </NavLink>
+      </nav>
 
       <div className="admin-header-right">
         <span className="admin-welcome-text">
