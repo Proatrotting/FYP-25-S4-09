@@ -650,6 +650,36 @@ async def revoke_share(
         detail="Share not found or access denied"
     )
 
+@router.get("/files/preview/{file_id}")
+async def preview_own_file(
+    file_id: str,
+    current_user: Account = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Preview a file owned by the current user.
+    """
+    # Ensure ownership
+    file_obj = db.query(FileObject).filter(
+        FileObject.file_id == file_id,
+        FileObject.account_id == current_user.account_id,
+    ).first()
+    if not file_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found or not owned by user",
+        )
+
+    data, file_obj = await reconstruct_file_for_owner(file_id, db)
+
+    async def generate():
+        yield data  # simple one-shot streaming
+
+    return StreamingResponse(
+        generate(),
+        media_type=file_obj.content_type or "application/octet-stream",
+    )
+
 @router.get("/files/shared-download/{share_token}")
 async def download_shared_file(
     share_token: str,
@@ -997,6 +1027,100 @@ def search_users(
             account_type=user.account_type
         ) for user in users
     ]
+
+# This supposedly shares the same reconstruction logic as shared-download, and allows previewing the file for the owner.
+async def reconstruct_file_for_owner(file_id: str, db: Session) -> tuple[bytes, FileObject]:
+    """
+    Reuse the same reconstruction logic as shared-download,
+    but for an owned file_id (no sharing).
+    Returns (bytes, FileObject).
+    """
+    import httpx
+    import base64
+    from app.core.erasure_coding import get_erasure_coder_for_profile
+
+    masternode_url = "http://master-node:3000"
+
+    async with httpx.AsyncClient() as client:
+        # Get file info
+        file_info_resp = await client.get(f"{masternode_url}/files/info/{file_id}")
+        if file_info_resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+        if file_info_resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve file info: {file_info_resp.text}",
+            )
+        file_info = file_info_resp.json()["file"]
+
+        # Get fragments
+        fragments_resp = await client.get(f"{masternode_url}/fragments/{file_id}")
+        if fragments_resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve fragments: {fragments_resp.text}",
+            )
+        fragments = fragments_resp.json()
+        if not fragments:
+            raise HTTPException(status_code=404, detail="File fragments not found")
+
+        # Erasure decoder
+        try:
+            erasure_id = file_info["erasure_id"]
+            erasure_coder = get_erasure_coder_for_profile(erasure_id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to initialize erasure decoder: {str(e)}",
+            )
+
+        # Fetch fragment data
+        available_fragments = []
+        fragment_indexes = []
+
+        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+        for fragment in sorted_fragments:
+            fragment_num = fragment["num_fragment"]
+            api_endpoint = fragment.get("api_endpoint")
+            fragment_id = fragment.get("fragment_id")
+            if not api_endpoint or not fragment_id:
+                continue
+
+            fragment_url = f"{api_endpoint}/fragments/{fragment_id}"
+            try:
+                frag_resp = await client.get(fragment_url, timeout=30)
+                if frag_resp.status_code == 200:
+                    fragment_data = frag_resp.json()
+                    if fragment_data.get("success") and fragment_data.get("data"):
+                        decoded = base64.b64decode(fragment_data["data"])
+                        available_fragments.append(decoded)
+                        fragment_indexes.append(fragment_num)
+            except Exception:
+                continue
+
+        if not erasure_coder.can_reconstruct(len(available_fragments)):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Not enough fragments for reconstruction. "
+                    f"Need {erasure_coder.k}, got {len(available_fragments)}"
+                ),
+            )
+
+        reconstructed = erasure_coder.decode_data(available_fragments, fragment_indexes)
+        original_size = int(file_info["file_size"])
+        if len(reconstructed) > original_size:
+            reconstructed = reconstructed[:original_size]
+
+    # Local DB object
+    file_obj = db.query(FileObject).filter(
+        FileObject.file_id == file_id
+    ).first()
+    if not file_obj:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return reconstructed, file_obj
+
 
 @router.get("/files/shared-user-download/{share_id}")
 async def download_user_shared_file(
