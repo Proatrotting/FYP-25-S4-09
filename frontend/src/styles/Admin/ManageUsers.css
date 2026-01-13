@@ -1,0 +1,328 @@
+.admin-manage-users {
+  padding: 1.5rem 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.manage-users-title {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: #e3f2fd;
+  margin-bottom: 1.5rem;
+}
+
+/* Filters */
+.users-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.2rem;
+  background: rgba(15, 30, 50, 0.6);
+  border-radius: 12px;
+  border: 1px solid rgba(100, 120, 140, 0.3);
+}
+
+.users-filters .filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.users-filters .filter-group label {
+  font-size: 0.85rem;
+  color: #b0bec5;
+  font-weight: 500;
+}
+
+.users-filters .filter-group input,
+.users-filters .filter-group select {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+  border: 1px solid rgba(144, 202, 249, 0.3);
+  border-radius: 8px;
+  background: rgba(20, 40, 60, 0.8);
+  color: #eceff1;
+  min-width: 170px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.users-filters .filter-group input:focus,
+.users-filters .filter-group select:focus {
+  outline: none;
+  border-color: #42a5f5;
+  box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.15);
+}
+
+.users-filters .filter-group input::placeholder {
+  color: #78909c;
+}
+
+.users-search-btn {
+  padding: 0.55rem 1.4rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: linear-gradient(90deg, #1e88e5, #42a5f5);
+  color: #fff;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.users-search-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(33, 150, 243, 0.4);
+}
+
+.users-search-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Error */
+.users-error {
+  padding: 0.75rem 1rem;
+  background: rgba(239, 83, 80, 0.15);
+  border: 1px solid rgba(239, 83, 80, 0.5);
+  border-radius: 8px;
+  color: #ef9a9a;
+  margin-bottom: 1rem;
+}
+
+/* Table */
+.users-table-wrapper {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(100, 120, 140, 0.25);
+  background: rgba(12, 25, 40, 0.7);
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.users-table thead {
+  background: rgba(30, 50, 70, 0.9);
+}
+
+.users-table th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  color: #b0bec5;
+  border-bottom: 1px solid rgba(100, 120, 140, 0.35);
+  white-space: nowrap;
+}
+
+.users-table tbody tr {
+  border-bottom: 1px solid rgba(100, 120, 140, 0.15);
+  transition: background 0.15s ease;
+}
+
+.users-table tbody tr:hover {
+  background: rgba(66, 165, 245, 0.06);
+}
+
+.users-table td {
+  padding: 0.7rem 1rem;
+  color: #cfd8dc;
+  vertical-align: middle;
+}
+
+.users-empty {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: #78909c;
+}
+
+/* Cells */
+.cell-username {
+  font-weight: 500;
+  color: #e3f2fd;
+}
+
+.cell-email {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-created {
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: #90a4ae;
+}
+
+/* Badges */
+.type-badge,
+.status-badge {
+  display: inline-block;
+  padding: 0.23rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent;
+}
+
+.type-free {
+  background: rgba(158, 158, 158, 0.25);
+  color: #cfd8dc;
+  border-color: rgba(158, 158, 158, 0.5);
+}
+
+.type-paid {
+  background: rgba(38, 166, 154, 0.22);
+  color: #80cbc4;
+  border-color: rgba(38, 166, 154, 0.55);
+}
+
+.type-sysadmin {
+  background: rgba(94, 53, 177, 0.25);
+  color: #b39ddb;
+  border-color: rgba(94, 53, 177, 0.6);
+}
+
+.status-active {
+  background: rgba(102, 187, 106, 0.2);
+  color: #a5d6a7;
+  border-color: rgba(102, 187, 106, 0.6);
+}
+
+.status-inactive {
+  background: rgba(229, 115, 115, 0.2);
+  color: #ef9a9a;
+  border-color: rgba(229, 115, 115, 0.6);
+}
+
+/* Actions column */
+.col-actions {
+  text-align: right;
+}
+
+.cell-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.user-action-btn {
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: rgba(20, 40, 60, 0.9);
+  color: #cfd8dc;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.user-action-btn.subtle:hover:not(:disabled) {
+  background: rgba(144, 164, 174, 0.35);
+}
+
+.user-action-btn.primary {
+  background: rgba(33, 150, 243, 0.15);
+  color: #90caf9;
+  border-color: rgba(33, 150, 243, 0.6);
+}
+
+.user-action-btn.primary:hover:not(:disabled) {
+  background: rgba(33, 150, 243, 0.3);
+}
+
+.user-action-btn.danger {
+  background: rgba(244, 67, 54, 0.15);
+  color: #ef9a9a;
+  border-color: rgba(244, 67, 54, 0.7);
+}
+
+.user-action-btn.danger:hover:not(:disabled) {
+  background: rgba(244, 67, 54, 0.3);
+}
+
+.user-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Pagination */
+.users-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(100, 120, 140, 0.2);
+}
+
+.users-page-btn {
+  padding: 0.45rem 1rem;
+  font-size: 0.9rem;
+  border: 1px solid rgba(144, 202, 249, 0.35);
+  border-radius: 8px;
+  background: rgba(20, 40, 60, 0.7);
+  color: #90caf9;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.users-page-btn:hover:not(:disabled) {
+  background: rgba(66, 165, 245, 0.15);
+  border-color: #42a5f5;
+}
+
+.users-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.users-page-info {
+  font-size: 0.9rem;
+  color: #b0bec5;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .admin-manage-users {
+    padding: 1rem;
+  }
+
+  .users-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .users-filters .filter-group input,
+  .users-filters .filter-group select {
+    width: 100%;
+    min-width: unset;
+  }
+
+  .users-search-btn {
+    width: 100%;
+  }
+
+  .users-table th,
+  .users-table td {
+    padding: 0.55rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .cell-actions {
+    justify-content: flex-start;
+  }
+
+  .user-action-btn {
+    flex: 1 1 30%;
+    min-width: 80px;
+    text-align: center;
+  }
+}
