@@ -323,7 +323,18 @@ async def download_folder_as_zip(
                         
                         # Get relative path from folder structure
                         folder_path = folders[file_meta['folder_id']]["path"]
-                        relative_path = f"{folder_path}/{file_meta['file_name']}"
+                        
+                        # Remove root folder name from path to avoid nesting
+                        # E.g., "My Test Folder/subfolder" -> "subfolder"
+                        if folder_path == root_folder_name:
+                            # File is directly in root folder
+                            relative_path = file_meta['file_name']
+                        elif folder_path.startswith(f"{root_folder_name}/"):
+                            # Remove root folder prefix
+                            relative_path = f"{folder_path[len(root_folder_name) + 1:]}/{file_meta['file_name']}"
+                        else:
+                            # Fallback - shouldn't happen but keep original behavior
+                            relative_path = f"{folder_path}/{file_meta['file_name']}"
                         
                         # Additional check: prevent duplicate ZIP paths
                         if relative_path in zip_paths_used:
