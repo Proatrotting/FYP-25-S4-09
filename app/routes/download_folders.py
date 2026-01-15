@@ -278,6 +278,23 @@ async def download_folder_as_zip(
         
         logger.info(f"Found {len(files)} files to download")
         
+        # Debug: Log folder and file details to identify duplicates
+        logger.info(f"Folder IDs: {folder_ids}")
+        logger.info(f"Files: {[f['file_name'] for f in files]}")
+        
+        # Deduplicate files by file_id to prevent ZIP duplicates
+        seen_files = set()
+        unique_files = []
+        for file_meta in files:
+            if file_meta['file_id'] not in seen_files:
+                seen_files.add(file_meta['file_id'])
+                unique_files.append(file_meta)
+            else:
+                logger.warning(f"Duplicate file detected: {file_meta['file_name']} (ID: {file_meta['file_id']})")
+        
+        files = unique_files
+        logger.info(f"After deduplication: {len(files)} unique files")
+        
         if not files:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -288,6 +305,9 @@ async def download_folder_as_zip(
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Track paths to prevent duplicates at ZIP level too
+            zip_paths_used = set()
+            
             for file_meta in files:
                 try:
                     # Download file data using direct function call (fast!)
@@ -304,6 +324,13 @@ async def download_folder_as_zip(
                         # Get relative path from folder structure
                         folder_path = folders[file_meta['folder_id']]["path"]
                         relative_path = f"{folder_path}/{file_meta['file_name']}"
+                        
+                        # Additional check: prevent duplicate ZIP paths
+                        if relative_path in zip_paths_used:
+                            logger.warning(f"Duplicate ZIP path detected, skipping: {relative_path}")
+                            continue
+                        
+                        zip_paths_used.add(relative_path)
                         
                         # Add to ZIP with proper path
                         zip_file.writestr(relative_path, file_data)

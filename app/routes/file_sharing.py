@@ -1389,14 +1389,43 @@ async def download_folder_share(
     
     all_files = get_all_files_recursive(str(folder_share.folder_id))
     
+    # Debug: Check for duplicates in shared folder downloads
+    file_ids_seen = set()
+    unique_files = []
+    duplicates_found = []
+    
+    for file_info in all_files:
+        file_id = str(file_info["file_obj"].file_id)
+        if file_id not in file_ids_seen:
+            file_ids_seen.add(file_id)
+            unique_files.append(file_info)
+        else:
+            duplicates_found.append(file_info["file_obj"].file_name)
+    
+    if duplicates_found:
+        logger.warning(f"Duplicate files detected in shared folder download: {duplicates_found}")
+    
+    all_files = unique_files
+    logger.info(f"Processing {len(all_files)} unique files for shared folder download")
+    
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     
     async with httpx.AsyncClient() as http_client:
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Track ZIP paths to prevent duplicates at ZIP level
+            zip_paths_used = set()
+            
             for file_info in all_files:
                 file_obj = file_info["file_obj"]
                 zip_path = file_info["zip_path"]
+                
+                # Additional ZIP-level duplicate check
+                if zip_path in zip_paths_used:
+                    logger.warning(f"Duplicate ZIP path detected in shared folder, skipping: {zip_path}")
+                    continue
+                
+                zip_paths_used.add(zip_path)
                 
                 try:
                     # Reconstruct file using the same logic as individual file download
@@ -2491,6 +2520,25 @@ async def download_user_shared_folder(
     
     all_files = get_all_files_recursive(str(folder_share.folder_id))
     
+    # Debug: Check for duplicates in user shared folder downloads
+    file_ids_seen = set()
+    unique_files = []
+    duplicates_found = []
+    
+    for file_info in all_files:
+        file_id = str(file_info["file_obj"].file_id)
+        if file_id not in file_ids_seen:
+            file_ids_seen.add(file_id)
+            unique_files.append(file_info)
+        else:
+            duplicates_found.append(file_info["file_obj"].file_name)
+    
+    if duplicates_found:
+        logger.warning(f"Duplicate files detected in user shared folder download: {duplicates_found}")
+    
+    all_files = unique_files
+    logger.info(f"Processing {len(all_files)} unique files for user shared folder download")
+    
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     
@@ -2502,9 +2550,19 @@ async def download_user_shared_folder(
     
     async with httpx.AsyncClient() as client:
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Track ZIP paths to prevent duplicates at ZIP level
+            zip_paths_used = set()
+            
             for file_info in all_files:
                 file_obj = file_info["file_obj"]
                 zip_path = file_info["zip_path"]
+                
+                # Additional ZIP-level duplicate check
+                if zip_path in zip_paths_used:
+                    logger.warning(f"Duplicate ZIP path detected in user shared folder, skipping: {zip_path}")
+                    continue
+                
+                zip_paths_used.add(zip_path)
                 
                 try:
                     # Get file info
