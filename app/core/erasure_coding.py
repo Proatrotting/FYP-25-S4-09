@@ -4,6 +4,7 @@ Uses Reed-Solomon encoding with the reedsolo library for fault tolerance and dat
 """
 
 import reedsolo
+import requests
 from typing import List, Dict, Any
 import logging
 import os
