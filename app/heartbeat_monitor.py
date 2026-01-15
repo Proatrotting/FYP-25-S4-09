@@ -9,10 +9,10 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-# Add app directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app'))
+# Python path already configured by container
 
 from app.master_node_db import MasterNodeDB
+from app.core.active_repair import handle_node_failure_event
 
 # Configure logging
 logging.basicConfig(
@@ -127,7 +127,7 @@ class HeartbeatMonitor:
             logger.error(f"Error checking node health: {e}", exc_info=True)
     
     async def mark_node_inactive(self, node_id: str):
-        """Mark a node as inactive"""
+        """Mark a node as inactive and trigger repair jobs for affected fragments"""
         try:
             sql = """
                 UPDATE NODE
@@ -136,6 +136,17 @@ class HeartbeatMonitor:
             """
             self.master_db.execute(sql, [node_id])
             logger.info(f"Marked node {node_id} as inactive")
+            
+            # Trigger active repair system for failed node
+            try:
+                repair_jobs_created = await handle_node_failure_event(node_id)
+                if repair_jobs_created > 0:
+                    logger.warning(f"Created {repair_jobs_created} repair jobs for failed node {node_id}")
+                else:
+                    logger.info(f"No repair jobs needed for failed node {node_id}")
+            except Exception as repair_error:
+                logger.error(f"Error triggering repair for node {node_id}: {repair_error}")
+                
         except Exception as e:
             logger.error(f"Error marking node {node_id} inactive: {e}")
     

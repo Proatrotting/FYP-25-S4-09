@@ -14,8 +14,7 @@ from typing import List, Dict, Optional
 import httpx
 import requests
 
-# Add app directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app'))
+# Python path already configured by container
 
 from app.core.erasure_coding import get_erasure_coder_for_profile
 from app.master_node_db import MasterNodeDB

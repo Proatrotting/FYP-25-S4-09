@@ -263,6 +263,43 @@ async def download_file(
             detail=f"Master node unavailable: {str(e)}"
         )
 
+@router.get("/download-with-session/{file_id}")
+async def download_file_with_session(
+    file_id: str,
+    session_id: str = None,
+    current_account = Depends(get_current_account)
+):
+    """Download a file with session tracking for cancellation support."""
+    from app.core.download_with_session import process_file_download_with_session
+    
+    try:
+        account_id = current_account["account_id"]
+        reconstructed_data, download_session_id = await process_file_download_with_session(
+            file_id, account_id, session_id
+        )
+        
+        # Get file info for filename
+        async with httpx.AsyncClient() as client:
+            file_info_response = await client.get(f"{MASTER_NODE_URL}/files/info/{file_id}")
+        file_info = file_info_response.json()["file"]
+        
+        # Return file with proper headers and session info
+        return Response(
+            content=reconstructed_data,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename={file_info['file_name']}",
+                "Content-Length": str(len(reconstructed_data)),
+                "X-Session-ID": download_session_id
+            }
+        )
+    
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Master node unavailable: {str(e)}"
+        )
+
 @router.get("/info/{file_id}", response_model=FileInfo)
 async def get_file_info(file_id: str, current_account = Depends(get_current_account)):
     """Get file information by ID."""

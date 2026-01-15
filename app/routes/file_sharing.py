@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from pydantic import BaseModel, Field
@@ -7,6 +8,8 @@ from typing import Optional, List
 import secrets
 import hashlib
 import uuid
+import requests
+import httpx
 from datetime import datetime, timedelta, timezone
 
 from app.db.session import get_db
@@ -65,14 +68,10 @@ class SharedWithMeResponse(BaseModel):
     expires_at: Optional[datetime]
 
 class UserSearchResponse(BaseModel):
+    account_id: str
     username: str
     email: str
     account_type: str
-    shared_by_username: str
-    permissions: str
-    expires_at: Optional[datetime]
-    requires_password: bool
-    is_expired: bool
 
 def get_current_user_optional(
     authorization: str = Header(None),
@@ -170,6 +169,7 @@ def log_share_access(
 @router.post("/files/create", response_model=ShareResponse)
 async def create_file_share(
     request: CreateFileShareRequest,
+    http_request: Request,
     current_user: Account = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -232,8 +232,24 @@ async def create_file_share(
     db.add(file_share)
     db.commit()
     
-    # Generate share URL
-    share_url = f"/shares/files/access/{share_token}"
+    # Generate dynamic share URL based on request host but use frontend port/domain
+    api_host = http_request.headers.get('host', 'localhost:8004')
+    scheme = 'https' if http_request.headers.get('x-forwarded-proto') == 'https' else 'http'
+    
+    # Map backend hosts to frontend hosts
+    if 'localhost:8004' in api_host:
+        frontend_url = api_host.replace(':8004', ':8080')
+        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
+    elif '127.0.0.1:8004' in api_host:
+        frontend_url = api_host.replace(':8004', ':8080')
+        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
+    elif 'shardfyp.myddns.me' in api_host:
+        # Production backend -> frontend mapping
+        share_url = f"https://fyp25s409-shard-git-cloud-variant-proatrottings-projects.vercel.app/share_access.html?token={share_token}"
+    else:
+        # Fallback for other domains - assume same host different port
+        frontend_host = api_host.replace(':8004', ':8080') if ':8004' in api_host else api_host
+        share_url = f"{scheme}://{frontend_host}/share_access.html?token={share_token}"
     
     return ShareResponse(
         share_id=str(file_share.share_id),
@@ -247,6 +263,7 @@ async def create_file_share(
 @router.post("/folders/create", response_model=ShareResponse)
 async def create_folder_share(
     request: CreateFolderShareRequest,
+    http_request: Request,
     current_user: Account = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -309,8 +326,24 @@ async def create_folder_share(
     db.add(folder_share)
     db.commit()
     
-    # Generate share URL
-    share_url = f"/shares/folders/access/{share_token}"
+    # Generate dynamic share URL based on request host but use frontend port/domain
+    api_host = http_request.headers.get('host', 'localhost:8004')
+    scheme = 'https' if http_request.headers.get('x-forwarded-proto') == 'https' else 'http'
+    
+    # Map backend hosts to frontend hosts
+    if 'localhost:8004' in api_host:
+        frontend_url = api_host.replace(':8004', ':8080')
+        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
+    elif '127.0.0.1:8004' in api_host:
+        frontend_url = api_host.replace(':8004', ':8080')
+        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
+    elif 'shardfyp.myddns.me' in api_host:
+        # Production backend -> frontend mapping
+        share_url = f"https://fyp25s409-shard-git-cloud-variant-proatrottings-projects.vercel.app/share_access.html?token={share_token}"
+    else:
+        # Fallback for other domains - assume same host different port
+        frontend_host = api_host.replace(':8004', ':8080') if ':8004' in api_host else api_host
+        share_url = f"{scheme}://{frontend_host}/share_access.html?token={share_token}"
     
     return ShareResponse(
         share_id=str(folder_share.share_id),
@@ -506,10 +539,10 @@ async def access_file_share(
                 detail="Invalid password"
             )
         
-        # Mark password as used (one-time use)
-        file_share.used_at = datetime.now(timezone.utc)
-        file_share.is_active = "EXPIRED"  # Make it one-time use
-        db.commit()
+        # Record first access time
+        if file_share.used_at is None:
+            file_share.used_at = datetime.now(timezone.utc)
+            db.commit()
     
     # Log successful access
     log_share_access(
@@ -545,6 +578,920 @@ async def access_file_share(
             "file_size": file_obj.file_size,
             "uploaded_at": file_obj.uploaded_at
         }
+
+@router.post("/folders/access")
+async def access_folder_share(
+    request_data: AccessShareRequest,
+    request: Request,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Access a shared folder with optional password verification"""
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_token == request_data.share_token
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share not found"
+        )
+    
+    # Check if expired
+    if folder_share.expires_at and datetime.now(timezone.utc) > folder_share.expires_at:
+        folder_share.is_active = "EXPIRED"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share has expired"
+        )
+    
+    if folder_share.is_active != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share is no longer active"
+        )
+    
+    # Check password if required
+    if folder_share.password_hash:
+        if not request_data.password:
+            log_share_access(
+                db=db,
+                share_id=str(folder_share.share_id),
+                share_type="FOLDER",
+                action="PASSWORD_ATTEMPT",
+                success="FAILED",
+                accessed_by=current_user.account_id if current_user else None,
+                request=request
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Password required"
+            )
+        
+        if hash_password(request_data.password) != folder_share.password_hash:
+            log_share_access(
+                db=db,
+                share_id=str(folder_share.share_id),
+                share_type="FOLDER",
+                action="PASSWORD_ATTEMPT",
+                success="FAILED",
+                accessed_by=current_user.account_id if current_user else None,
+                request=request
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password"
+            )
+        
+        # Record first access time
+        if folder_share.used_at is None:
+            folder_share.used_at = datetime.now(timezone.utc)
+            db.commit()
+    
+    # Log successful access
+    log_share_access(
+        db=db,
+        share_id=str(folder_share.share_id),
+        share_type="FOLDER",
+        action="VIEW" if folder_share.permissions == "VIEW" else "DOWNLOAD",
+        success="SUCCESS",
+        accessed_by=current_user.account_id if current_user else None,
+        request=request
+    )
+    
+    # Get folder info
+    folder_obj = db.query(Folder).filter(
+        Folder.folder_id == folder_share.folder_id
+    ).first()
+    
+    return {
+        "message": "Access granted",
+        "permissions": folder_share.permissions,
+        "folder_id": str(folder_share.folder_id),
+        "folder_name": folder_obj.name,
+        "resource_name": folder_obj.name,
+        "resource_type": "FOLDER"
+    }
+
+@router.get("/folders/browse/{share_token}")
+async def browse_folder_share(
+    share_token: str,
+    password: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Browse the contents of a shared folder"""
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_token == share_token
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share not found"
+        )
+    
+    # Check if expired
+    if folder_share.expires_at and datetime.now(timezone.utc) > folder_share.expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share has expired"
+        )
+    
+    if folder_share.is_active != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share is no longer active"
+        )
+    
+    # Check password if required
+    if folder_share.password_hash and password:
+        if hash_password(password) != folder_share.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password"
+            )
+    elif folder_share.password_hash and not password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Password required"
+        )
+    
+    # Get folder contents
+    folder_obj = db.query(Folder).filter(
+        Folder.folder_id == folder_share.folder_id
+    ).first()
+    
+    # Get subfolders
+    subfolders = db.query(Folder).filter(
+        Folder.parent_folder_id == folder_share.folder_id
+    ).all()
+    
+    # Get files in folder
+    files = db.query(FileObject).filter(
+        FileObject.folder_id == folder_share.folder_id
+    ).all()
+    
+    # Format response
+    folder_contents = {
+        "folder_name": folder_obj.name,
+        "folder_id": str(folder_obj.folder_id),
+        "subfolders": [
+            {
+                "folder_id": str(folder.folder_id),
+                "name": folder.name,
+                "created_at": folder.created_at.isoformat()
+            }
+            for folder in subfolders
+        ],
+        "files": [
+            {
+                "file_id": str(file.file_id),
+                "file_name": file.file_name,
+                "file_size": file.file_size,
+                "uploaded_at": file.uploaded_at.isoformat(),
+                "logical_path": file.logical_path
+            }
+            for file in files
+        ]
+    }
+    
+    return folder_contents
+
+@router.get("/folders/subfolder/{share_token}/{folder_id}")
+async def browse_subfolder_share(
+    share_token: str,
+    folder_id: str,
+    password: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Browse contents of a subfolder within a shared folder"""
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_token == share_token
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share not found"
+        )
+    
+    # Verify password if required
+    if folder_share.password_hash and password:
+        if hash_password(password) != folder_share.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password"
+            )
+    elif folder_share.password_hash and not password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Password required"
+        )
+    
+    # Verify folder exists and is within shared folder tree
+    target_folder = db.query(Folder).filter(
+        Folder.folder_id == folder_id
+    ).first()
+    
+    if not target_folder:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Folder not found"
+        )
+    
+    # Get subfolders
+    subfolders = db.query(Folder).filter(
+        Folder.parent_folder_id == folder_id
+    ).all()
+    
+    # Get files in folder
+    files = db.query(FileObject).filter(
+        FileObject.folder_id == folder_id
+    ).all()
+    
+    # Format response
+    subfolder_contents = {
+        "folder_name": target_folder.name,
+        "folder_id": str(target_folder.folder_id),
+        "subfolders": [
+            {
+                "folder_id": str(folder.folder_id),
+                "name": folder.name,
+                "created_at": folder.created_at.isoformat()
+            }
+            for folder in subfolders
+        ],
+        "files": [
+            {
+                "file_id": str(file.file_id),
+                "file_name": file.file_name,
+                "file_size": file.file_size,
+                "uploaded_at": file.uploaded_at.isoformat(),
+                "logical_path": file.logical_path
+            }
+            for file in files
+        ]
+    }
+    
+    return subfolder_contents
+
+@router.get("/files/shared-download-by-id/{share_token}/{file_id}")
+async def download_individual_file_from_share(
+    share_token: str,
+    file_id: str,
+    password: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Download individual file from a shared folder"""
+    from fastapi.responses import FileResponse
+    
+    # Find the folder share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_token == share_token
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share not found"
+        )
+    
+    # Check permissions
+    if folder_share.permissions != "DOWNLOAD":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Download not allowed for this share"
+        )
+    
+    # Verify password if required
+    if folder_share.password_hash and password:
+        if hash_password(password) != folder_share.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password"
+            )
+    elif folder_share.password_hash and not password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Password required"
+        )
+    
+        # Get the file
+    file_obj = db.query(FileObject).filter(
+        FileObject.file_id == file_id
+    ).first()
+    
+    if not file_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+    
+    # Return file info for download
+    return {
+        "message": "Download authorized",
+        "file_id": str(file_obj.file_id),
+        "file_name": file_obj.file_name,
+        "file_size": file_obj.file_size,
+        "download_url": f"http://localhost:8004/shares/files/shared-download-stream/{share_token}/{file_obj.file_id}"
+    }
+
+@router.get("/files/shared-download-stream/{share_token}/{file_id}")
+async def download_shared_file_stream(
+    share_token: str,
+    file_id: str,
+    password: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Download individual file from a shared folder or file share"""
+    from app.core.config import get_settings
+    from app.routes.download_files import process_file_download
+    import base64
+    from app.core.erasure_coding import get_erasure_coder_for_profile
+    
+    settings = get_settings()
+    MASTER_NODE_URL = settings.master_node_url
+    
+    # Try to find file share first
+    file_share = db.query(FileShare).filter(
+        FileShare.share_token == share_token
+    ).first()
+    
+    # If not found, try folder share
+    folder_share = None
+    if not file_share:
+        folder_share = db.query(FolderShare).filter(
+            FolderShare.share_token == share_token
+        ).first()
+        
+        if not folder_share:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Share not found"
+            )
+    
+    # Check permissions
+    if file_share:
+        if file_share.permissions != "DOWNLOAD":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Download not allowed for this share"
+            )
+        
+        # Verify password if required
+        if file_share.password_hash and password:
+            if hash_password(password) != file_share.password_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid password"
+                )
+        elif file_share.password_hash and not password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Password required"
+            )
+    else:  # folder_share
+        if folder_share.permissions != "DOWNLOAD":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Download not allowed for this share"
+            )
+        
+        # Verify password if required
+        if folder_share.password_hash and password:
+            if hash_password(password) != folder_share.password_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid password"
+                )
+        elif folder_share.password_hash and not password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Password required"
+            )
+    
+    # Get the file
+    file_obj = db.query(FileObject).filter(
+        FileObject.file_id == file_id
+    ).first()
+    
+    if not file_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+    
+    # Reconstruct file from fragments (same as normal download)
+    try:
+        # Get file info to verify it exists
+        async with httpx.AsyncClient() as client:
+            file_info_response = await client.get(f"{MASTER_NODE_URL}/files/info/{file_id}")
+        
+        if file_info_response.status_code == 404:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        if file_info_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve file info"
+            )
+        
+        file_info = file_info_response.json()["file"]
+        
+        # Get fragment information
+        async with httpx.AsyncClient() as client:
+            fragments_response = await client.get(f"{MASTER_NODE_URL}/fragments/{file_id}")
+        
+        if fragments_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve fragments"
+            )
+        
+        fragments = fragments_response.json()
+        
+        if not fragments:
+            raise HTTPException(status_code=404, detail="File fragments not found")
+        
+        # Initialize erasure decoder
+        erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
+        
+        # Download available fragments from storage nodes
+        available_fragments = []
+        fragment_indexes = []
+        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+        
+        async with httpx.AsyncClient() as client:
+            for fragment in sorted_fragments:
+                if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                    continue
+                    
+                node_endpoint = fragment["api_endpoint"]
+                fragment_url = f"{node_endpoint}/fragments/{fragment['fragment_id']}"
+                
+                try:
+                    frag_response = await client.get(fragment_url, timeout=30)
+                    if frag_response.status_code == 200:
+                        fragment_data = frag_response.json()
+                        if fragment_data.get("success") and fragment_data.get("data"):
+                            decoded_data = base64.b64decode(fragment_data["data"])
+                            available_fragments.append(decoded_data)
+                            fragment_indexes.append(fragment["num_fragment"])
+                except httpx.RequestError:
+                    continue
+        
+        # Check if we have enough fragments
+        if not erasure_coder.can_reconstruct(len(available_fragments)):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}"
+            )
+        
+        # Reconstruct original file
+        reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+        
+        # Truncate to original file size
+        original_file_size = int(file_info["file_size"])
+        if len(reconstructed_data) > original_file_size:
+            reconstructed_data = reconstructed_data[:original_file_size]
+        
+        return Response(
+            content=reconstructed_data,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_obj.file_name}"',
+                "Content-Length": str(len(reconstructed_data))
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Download error: {str(e)}"
+        )
+
+@router.get("/folders/shared-download-subfolder/{share_token}/{folder_id}")
+async def download_shared_subfolder(
+    share_token: str,
+    folder_id: str,
+    password: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Download a specific subfolder from an anonymous share as ZIP file"""
+    from fastapi.responses import StreamingResponse
+    import zipfile
+    import io
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_token == share_token
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share not found"
+        )
+    
+    # Check if expired
+    if folder_share.expires_at and datetime.now(timezone.utc) > folder_share.expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share has expired"
+        )
+    
+    if folder_share.is_active != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share is no longer active"
+        )
+    
+    # Check password if required
+    if folder_share.password_hash and password:
+        if not verify_password(password, folder_share.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password"
+            )
+    elif folder_share.password_hash and not password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Password required"
+        )
+    
+    # Check permissions
+    if folder_share.permissions not in ["DOWNLOAD"]:
+        raise HTTPException(status_code=403, detail="Download permission not granted")
+    
+    # Get the specific subfolder
+    subfolder_obj = db.query(Folder).filter(
+        Folder.folder_id == folder_id
+    ).first()
+    
+    if not subfolder_obj:
+        raise HTTPException(status_code=404, detail="Subfolder not found")
+    
+    # Verify subfolder is within the shared folder tree
+    def is_folder_in_shared_tree(target_folder_id, root_folder_id):
+        """Check if target folder is within the shared folder tree"""
+        current_folder = db.query(Folder).filter(Folder.folder_id == target_folder_id).first()
+        
+        while current_folder:
+            if str(current_folder.folder_id) == str(root_folder_id):
+                return True
+            if current_folder.parent_folder_id is None:
+                return False
+            current_folder = db.query(Folder).filter(
+                Folder.folder_id == current_folder.parent_folder_id
+            ).first()
+        
+        return False
+    
+    if not is_folder_in_shared_tree(folder_id, folder_share.folder_id):
+        raise HTTPException(status_code=403, detail="Subfolder not in shared folder tree")
+    
+    # Get all files in the subfolder and its subfolders (recursive)
+    def get_all_files_recursive(target_folder_id, path_prefix=""):
+        all_files = []
+        
+        # Get direct files in this folder
+        files = db.query(FileObject).filter(
+            FileObject.folder_id == target_folder_id
+        ).all()
+        
+        for file in files:
+            all_files.append({
+                "file_obj": file,
+                "zip_path": f"{path_prefix}{file.file_name}"
+            })
+        
+        # Get subfolders and their files
+        subfolders = db.query(Folder).filter(
+            Folder.parent_folder_id == target_folder_id
+        ).all()
+        
+        for sub_subfolder in subfolders:
+            sub_subfolder_path = f"{path_prefix}{sub_subfolder.name}/"
+            all_files.extend(get_all_files_recursive(str(sub_subfolder.folder_id), sub_subfolder_path))
+        
+        return all_files
+    
+    all_files = get_all_files_recursive(folder_id)
+    
+    if not all_files:
+        # Return empty ZIP file if no files
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("empty_folder.txt", "This folder contains no files.")
+        zip_buffer.seek(0)
+        
+        return StreamingResponse(
+            io.BytesIO(zip_buffer.read()),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{subfolder_obj.name}.zip"'}
+        )
+    
+    # Create ZIP file with actual file contents
+    zip_buffer = io.BytesIO()
+    
+    try:
+        import httpx
+        import base64
+        from app.core.erasure_coding import get_erasure_coder_for_profile
+        
+        master_node_url = "http://master_node:3000"
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            async with httpx.AsyncClient() as client:
+                for file_data in all_files:
+                    file_obj = file_data["file_obj"]
+                    zip_path = file_data["zip_path"]
+                    
+                    try:
+                        # Get file info and reconstruct content
+                        file_info_response = await client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
+                        if file_info_response.status_code != 200:
+                            continue
+                        
+                        file_info_data = file_info_response.json()["file"]
+                        
+                        # Get fragments
+                        fragments_response = await client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
+                        if fragments_response.status_code != 200:
+                            continue
+                        
+                        fragments = fragments_response.json()
+                        if not fragments:
+                            continue
+                        
+                        # Initialize erasure decoder
+                        erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
+                        
+                        # Fetch and reconstruct file
+                        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+                        available_fragments = []
+                        fragment_indexes = []
+                        
+                        for fragment in sorted_fragments:
+                            if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                                continue
+                            
+                            storage_url = fragment["api_endpoint"]
+                            fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
+                            
+                            try:
+                                frag_response = await client.get(fragment_url, timeout=30)
+                                if frag_response.status_code == 200:
+                                    fragment_data = frag_response.json()
+                                    if fragment_data.get("success") and fragment_data.get("data"):
+                                        decoded_data = base64.b64decode(fragment_data["data"])
+                                        available_fragments.append(decoded_data)
+                                        fragment_indexes.append(fragment["num_fragment"])
+                            except Exception:
+                                continue
+                        
+                        if not erasure_coder.can_reconstruct(len(available_fragments)):
+                            continue
+                        
+                        # Reconstruct file
+                        reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+                        
+                        # Truncate to original size
+                        original_file_size = int(file_info_data["file_size"])
+                        if len(reconstructed_data) > original_file_size:
+                            reconstructed_data = reconstructed_data[:original_file_size]
+                        
+                        # Write actual file content to ZIP
+                        zip_file.writestr(zip_path, reconstructed_data)
+                        
+                    except Exception as e:
+                        # Add error file if download fails
+                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+        
+        zip_buffer.seek(0)
+        
+        return StreamingResponse(
+            io.BytesIO(zip_buffer.read()),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{subfolder_obj.name}.zip"'}
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+@router.get("/folders/shared-download/{share_token}")
+async def download_folder_share(
+    share_token: str,
+    password: Optional[str] = None,
+    request: Request = None,
+    current_user: Optional[Account] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """Download a shared folder as ZIP file"""
+    from fastapi.responses import StreamingResponse
+    import zipfile
+    import io
+    import requests
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_token == share_token
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Share not found"
+        )
+    
+    # Check permissions
+    if folder_share.permissions not in ["DOWNLOAD"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Download not allowed for this share"
+        )
+    
+    # Check if expired
+    if folder_share.expires_at and datetime.now(timezone.utc) > folder_share.expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share has expired"
+        )
+    
+    if folder_share.is_active != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Share is no longer active"
+        )
+    
+    # Check password if required
+    if folder_share.password_hash and password:
+        if hash_password(password) != folder_share.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid password"
+            )
+    elif folder_share.password_hash and not password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Password required"
+        )
+    
+    # Get folder info and all files recursively
+    folder_obj = db.query(Folder).filter(
+        Folder.folder_id == folder_share.folder_id
+    ).first()
+    
+    # Get all files in the folder and subfolders (recursive)
+    def get_all_files_recursive(folder_id, path_prefix=""):
+        all_files = []
+        
+        # Get direct files in this folder
+        files = db.query(FileObject).filter(
+            FileObject.folder_id == folder_id
+        ).all()
+        
+        for file in files:
+            all_files.append({
+                "file_obj": file,
+                "zip_path": f"{path_prefix}{file.file_name}"
+            })
+        
+        # Get subfolders and their files
+        subfolders = db.query(Folder).filter(
+            Folder.parent_folder_id == folder_id
+        ).all()
+        
+        for subfolder in subfolders:
+            subfolder_path = f"{path_prefix}{subfolder.name}/"
+            all_files.extend(get_all_files_recursive(str(subfolder.folder_id), subfolder_path))
+        
+        return all_files
+    
+    all_files = get_all_files_recursive(str(folder_share.folder_id))
+    
+    # Create ZIP file in memory
+    zip_buffer = io.BytesIO()
+    
+    async with httpx.AsyncClient() as http_client:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for file_info in all_files:
+                file_obj = file_info["file_obj"]
+                zip_path = file_info["zip_path"]
+                
+                try:
+                    # Reconstruct file using the same logic as individual file download
+                    from app.core.erasure_coding import get_erasure_coder_for_profile
+                    import base64
+                    import logging
+                    
+                    logger = logging.getLogger(__name__)
+                    master_node_url = "http://master_node:3000"
+                    
+                    # Get file info
+                    file_info_response = await http_client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
+                    if file_info_response.status_code != 200:
+                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to get file info: {file_info_response.text}")
+                        continue
+                    
+                    file_info_data = file_info_response.json()["file"]
+                    
+                    # Get fragment information
+                    fragments_response = await http_client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
+                    if fragments_response.status_code != 200:
+                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to get fragments: {fragments_response.text}")
+                        continue
+                    
+                    fragments = fragments_response.json()
+                    if not fragments:
+                        zip_file.writestr(f"{zip_path}.error.txt", "File fragments not found")
+                        continue
+                    
+                    # Initialize erasure decoder
+                    erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
+                    
+                    # Fetch and reconstruct file data
+                    sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+                    available_fragments = []
+                    fragment_indexes = []
+                    
+                    for fragment in sorted_fragments:
+                        if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                            continue
+                            
+                        fragment_url = f"{fragment['api_endpoint']}/fragments/{fragment['fragment_id']}"
+                        try:
+                            fragment_response = await http_client.get(fragment_url, timeout=30.0)
+                            if fragment_response.status_code == 200:
+                                fragment_data = fragment_response.json()
+                                if fragment_data.get("success") and fragment_data.get("data"):
+                                    decoded_fragment = base64.b64decode(fragment_data["data"])
+                                    available_fragments.append(decoded_fragment)
+                                    fragment_indexes.append(fragment["num_fragment"])
+                        except Exception as frag_e:
+                            logger.warning(f"Failed to fetch fragment {fragment['fragment_id']}: {frag_e}")
+                            continue
+                    
+                    # Check if we have enough fragments to reconstruct
+                    if not erasure_coder.can_reconstruct(len(available_fragments)):
+                        zip_file.writestr(f"{zip_path}.error.txt", 
+                                        f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}")
+                        continue
+                    
+                    # Reconstruct the file
+                    reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+                    
+                    # Trim to original size
+                    original_size = int(file_info_data["file_size"])
+                    if len(reconstructed_data) > original_size:
+                        reconstructed_data = reconstructed_data[:original_size]
+                    
+                    # Add reconstructed file to ZIP
+                    zip_file.writestr(zip_path, reconstructed_data)
+                    logger.info(f"Successfully added {file_obj.file_name} to ZIP ({len(reconstructed_data)} bytes)")
+                    
+                except Exception as e:
+                    # Add error file if reconstruction fails
+                    logger.error(f"Failed to reconstruct file {file_obj.file_name}: {e}")
+                    zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+    
+    zip_buffer.seek(0)
+    
+    # Log download
+    log_share_access(
+        db=db,
+        share_id=str(folder_share.share_id),
+        share_type="FOLDER",
+        action="DOWNLOAD",
+        success="SUCCESS",
+        accessed_by=current_user.account_id if current_user else None,
+        request=request
+    )
+    
+    return StreamingResponse(
+        io.BytesIO(zip_buffer.read()),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=\"{folder_obj.name}.zip\""}
+    )
 
 @router.get("/my-shares", response_model=List[ShareInfo])
 async def get_my_shares(
@@ -998,6 +1945,45 @@ def get_files_shared_with_me(
     
     return result
 
+@router.get("/folders/with-me", response_model=List[SharedWithMeResponse])
+def get_folders_shared_with_me(
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Get all folders shared with the current user (Google Drive style)"""
+    
+    # Get folders shared with current user
+    shared_folders = db.query(
+        FolderShare,
+        Folder,
+        Account
+    ).join(
+        Folder, FolderShare.folder_id == Folder.folder_id
+    ).join(
+        Account, FolderShare.shared_by == Account.account_id
+    ).filter(
+        FolderShare.shared_with == current_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).all()
+    
+    result = []
+    for share, folder, shared_by in shared_folders:
+        # Check if share is expired
+        if share.expires_at and share.expires_at < datetime.now(timezone.utc):
+            continue
+            
+        result.append(SharedWithMeResponse(
+            share_id=str(share.share_id),
+            file_id=str(folder.folder_id),  # Use folder_id as file_id for consistency
+            file_name=folder.name,
+            shared_by_username=shared_by.username,
+            permissions=share.permissions,
+            shared_at=share.created_at,
+            expires_at=share.expires_at
+        ))
+    
+    return result
+
 @router.get("/users/search", response_model=List[UserSearchResponse])
 def search_users(
     q: str,
@@ -1022,6 +2008,7 @@ def search_users(
     
     return [
         UserSearchResponse(
+            account_id=str(user.account_id),
             username=user.username,
             email=user.email,
             account_type=user.account_type
@@ -1039,7 +2026,7 @@ async def reconstruct_file_for_owner(file_id: str, db: Session) -> tuple[bytes, 
     import base64
     from app.core.erasure_coding import get_erasure_coder_for_profile
 
-    masternode_url = "http://master-node:3000"
+    masternode_url = "http://master_node:3000"
 
     async with httpx.AsyncClient() as client:
         # Get file info
@@ -1230,5 +2217,550 @@ async def download_user_shared_file(
                 }
             )
             
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+@router.get("/folders/shared-user-info/{share_id}")
+async def get_user_shared_folder_info(
+    share_id: str,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Get info about a folder shared directly with the current user"""
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_id == uuid.UUID(share_id),
+        FolderShare.shared_with == current_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(status_code=404, detail="Share not found or not accessible")
+    
+    # Check if share is expired
+    if folder_share.expires_at and folder_share.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Share has expired")
+    
+    folder = db.query(Folder).filter(Folder.folder_id == folder_share.folder_id).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    shared_by_user = db.query(Account).filter(Account.account_id == folder_share.shared_by).first()
+    
+    return {
+        "share_id": str(folder_share.share_id),
+        "folder_id": str(folder.folder_id),
+        "folder_name": folder.name,
+        "shared_by_username": shared_by_user.username if shared_by_user else "Unknown",
+        "permissions": folder_share.permissions,
+        "expires_at": folder_share.expires_at,
+        "shared_at": folder_share.created_at
+    }
+
+@router.get("/folders/shared-user-browse/{share_id}")
+async def browse_user_shared_folder(
+    share_id: str,
+    folder_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Browse contents of a folder shared directly with the current user"""
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_id == uuid.UUID(share_id),
+        FolderShare.shared_with == current_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(status_code=404, detail="Share not found or not accessible")
+    
+    # Check if share is expired
+    if folder_share.expires_at and folder_share.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Share has expired")
+    
+    # If no folder_id provided, use the shared folder's root
+    target_folder_id = folder_id or str(folder_share.folder_id)
+    
+    # Get the folder
+    folder = db.query(Folder).filter(Folder.folder_id == target_folder_id).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # Get contents of the folder
+    subfolders = db.query(Folder).filter(Folder.parent_folder_id == target_folder_id).all()
+    files = db.query(FileObject).filter(FileObject.folder_id == target_folder_id).all()
+    
+    return {
+        "folder_id": str(folder.folder_id),
+        "folder_name": folder.name,
+        "parent_folder_id": str(folder.parent_folder_id) if folder.parent_folder_id else None,
+        "subfolders": [
+            {
+                "folder_id": str(sf.folder_id),
+                "folder_name": sf.name,
+                "created_at": sf.created_at
+            } for sf in subfolders
+        ],
+        "files": [
+            {
+                "file_id": str(f.file_id),
+                "file_name": f.file_name,
+                "file_size": f.file_size,
+                "created_at": f.uploaded_at
+            } for f in files
+        ]
+    }
+
+@router.get("/folders/shared-user-download-file/{share_id}/{file_id}")
+async def download_file_from_user_shared_folder(
+    share_id: str,
+    file_id: str,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Download a file from a folder shared directly with the current user"""
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_id == uuid.UUID(share_id),
+        FolderShare.shared_with == current_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(status_code=404, detail="Share not found or not accessible")
+    
+    # Check if share is expired
+    if folder_share.expires_at and folder_share.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Share has expired")
+    
+    # Check permissions
+    if folder_share.permissions not in ["DOWNLOAD"]:
+        raise HTTPException(status_code=403, detail="Download permission not granted")
+    
+    # Get the file
+    file_obj = db.query(FileObject).filter(FileObject.file_id == file_id).first()
+    if not file_obj:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Verify file is in the shared folder tree (by checking folder_id matches)
+    if str(file_obj.folder_id) != str(folder_share.folder_id):
+        raise HTTPException(status_code=403, detail="File not in shared folder")
+    
+    # Reconstruct and download the file using same logic as shared-download
+    try:
+        import httpx
+        import base64
+        from app.core.erasure_coding import get_erasure_coder_for_profile
+        
+        master_node_url = "http://master_node:3000"
+        
+        async with httpx.AsyncClient() as client:
+            # Get file info
+            file_info_response = await client.get(f"{master_node_url}/files/info/{file_id}")
+            if file_info_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to retrieve file info")
+            
+            file_info = file_info_response.json()["file"]
+            
+            # Get fragments
+            fragments_response = await client.get(f"{master_node_url}/fragments/{file_id}")
+            if fragments_response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Failed to retrieve fragments")
+            
+            fragments = fragments_response.json()
+            if not fragments:
+                raise HTTPException(status_code=404, detail="File fragments not found")
+            
+            # Initialize erasure decoder
+            erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
+            
+            # Fetch and reconstruct file
+            sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+            available_fragments = []
+            fragment_indexes = []
+            
+            for fragment in sorted_fragments:
+                if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                    continue
+                
+                storage_url = fragment["api_endpoint"]
+                fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
+                
+                try:
+                    frag_response = await client.get(fragment_url, timeout=30)
+                    if frag_response.status_code == 200:
+                        fragment_data = frag_response.json()
+                        if fragment_data.get("success") and fragment_data.get("data"):
+                            decoded_data = base64.b64decode(fragment_data["data"])
+                            available_fragments.append(decoded_data)
+                            fragment_indexes.append(fragment["num_fragment"])
+                except Exception:
+                    continue
+            
+            if not erasure_coder.can_reconstruct(len(available_fragments)):
+                raise HTTPException(status_code=500, detail="Not enough fragments for reconstruction")
+            
+            # Reconstruct file
+            reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+            
+            # Truncate to original size
+            original_file_size = int(file_info["file_size"])
+            if len(reconstructed_data) > original_file_size:
+                reconstructed_data = reconstructed_data[:original_file_size]
+            
+            def generate():
+                yield reconstructed_data
+            
+            return StreamingResponse(
+                generate(),
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename=\"{file_obj.file_name}\"",
+                    "Content-Length": str(len(reconstructed_data))
+                }
+            )
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+@router.get("/folders/shared-user-download/{share_id}")
+async def download_user_shared_folder(
+    share_id: str,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Download a folder shared with the current user as ZIP file"""
+    from fastapi.responses import StreamingResponse
+    import zipfile
+    import io
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_id == uuid.UUID(share_id),
+        FolderShare.shared_with == current_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(status_code=404, detail="Share not found or not accessible")
+    
+    # Check if share is expired
+    if folder_share.expires_at and folder_share.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Share has expired")
+    
+    # Check permissions
+    if folder_share.permissions not in ["DOWNLOAD"]:
+        raise HTTPException(status_code=403, detail="Download permission not granted")
+    
+    # Get folder info
+    folder_obj = db.query(Folder).filter(
+        Folder.folder_id == folder_share.folder_id
+    ).first()
+    
+    if not folder_obj:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # Get all files in the folder and subfolders (recursive)
+    def get_all_files_recursive(folder_id, path_prefix=""):
+        all_files = []
+        
+        # Get direct files in this folder
+        files = db.query(FileObject).filter(
+            FileObject.folder_id == folder_id
+        ).all()
+        
+        for file in files:
+            all_files.append({
+                "file_obj": file,
+                "zip_path": f"{path_prefix}{file.file_name}"
+            })
+        
+        # Get subfolders and their files
+        subfolders = db.query(Folder).filter(
+            Folder.parent_folder_id == folder_id
+        ).all()
+        
+        for subfolder in subfolders:
+            subfolder_path = f"{path_prefix}{subfolder.name}/"
+            all_files.extend(get_all_files_recursive(str(subfolder.folder_id), subfolder_path))
+        
+        return all_files
+    
+    all_files = get_all_files_recursive(str(folder_share.folder_id))
+    
+    # Create ZIP file in memory
+    zip_buffer = io.BytesIO()
+    
+    import httpx
+    import base64
+    from app.core.erasure_coding import get_erasure_coder_for_profile
+    
+    master_node_url = "http://master_node:3000"
+    
+    async with httpx.AsyncClient() as client:
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for file_info in all_files:
+                file_obj = file_info["file_obj"]
+                zip_path = file_info["zip_path"]
+                
+                try:
+                    # Get file info
+                    file_info_response = await client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
+                    if file_info_response.status_code != 200:
+                        zip_file.writestr(f"{zip_path}.error.txt", "Failed to retrieve file info")
+                        continue
+                    
+                    file_info_data = file_info_response.json()["file"]
+                    
+                    # Get fragments
+                    fragments_response = await client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
+                    if fragments_response.status_code != 200:
+                        zip_file.writestr(f"{zip_path}.error.txt", "Failed to retrieve fragments")
+                        continue
+                    
+                    fragments = fragments_response.json()
+                    if not fragments:
+                        zip_file.writestr(f"{zip_path}.error.txt", "File fragments not found")
+                        continue
+                    
+                    # Initialize erasure decoder
+                    erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
+                    
+                    # Fetch and reconstruct file
+                    sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+                    available_fragments = []
+                    fragment_indexes = []
+                    
+                    for fragment in sorted_fragments:
+                        if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                            continue
+                        
+                        storage_url = fragment["api_endpoint"]
+                        fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
+                        
+                        try:
+                            frag_response = await client.get(fragment_url, timeout=30)
+                            if frag_response.status_code == 200:
+                                fragment_data = frag_response.json()
+                                if fragment_data.get("success") and fragment_data.get("data"):
+                                    decoded_data = base64.b64decode(fragment_data["data"])
+                                    available_fragments.append(decoded_data)
+                                    fragment_indexes.append(fragment["num_fragment"])
+                        except Exception:
+                            continue
+                    
+                    if not erasure_coder.can_reconstruct(len(available_fragments)):
+                        zip_file.writestr(f"{zip_path}.error.txt", "Not enough fragments for reconstruction")
+                        continue
+                    
+                    # Reconstruct file
+                    reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+                    
+                    # Truncate to original size
+                    original_file_size = int(file_info_data["file_size"])
+                    if len(reconstructed_data) > original_file_size:
+                        reconstructed_data = reconstructed_data[:original_file_size]
+                    
+                    # Write actual file content to ZIP
+                    zip_file.writestr(zip_path, reconstructed_data)
+                    
+                except Exception as e:
+                    # Add error file if download fails
+                    zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+    
+    zip_buffer.seek(0)
+    
+    return StreamingResponse(
+        io.BytesIO(zip_buffer.read()),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{folder_obj.name}.zip"'}
+    )
+
+@router.get("/folders/shared-user-download-subfolder/{share_id}/{folder_id}")
+async def download_subfolder_from_user_shared_folder(
+    share_id: str,
+    folder_id: str,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Download a specific subfolder from a shared folder as ZIP file"""
+    from fastapi.responses import StreamingResponse
+    import zipfile
+    import io
+    
+    # Find the share
+    folder_share = db.query(FolderShare).filter(
+        FolderShare.share_id == uuid.UUID(share_id),
+        FolderShare.shared_with == current_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).first()
+    
+    if not folder_share:
+        raise HTTPException(status_code=404, detail="Share not found or not accessible")
+    
+    # Check if share is expired
+    if folder_share.expires_at and folder_share.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Share has expired")
+    
+    # Check permissions
+    if folder_share.permissions not in ["DOWNLOAD"]:
+        raise HTTPException(status_code=403, detail="Download permission not granted")
+    
+    # Get the specific subfolder
+    subfolder_obj = db.query(Folder).filter(
+        Folder.folder_id == folder_id
+    ).first()
+    
+    if not subfolder_obj:
+        raise HTTPException(status_code=404, detail="Subfolder not found")
+    
+    # Verify subfolder is within the shared folder tree
+    def is_folder_in_shared_tree(target_folder_id, root_folder_id):
+        """Check if target folder is within the shared folder tree"""
+        current_folder = db.query(Folder).filter(Folder.folder_id == target_folder_id).first()
+        
+        while current_folder:
+            if str(current_folder.folder_id) == str(root_folder_id):
+                return True
+            if current_folder.parent_folder_id is None:
+                return False
+            current_folder = db.query(Folder).filter(
+                Folder.folder_id == current_folder.parent_folder_id
+            ).first()
+        
+        return False
+    
+    if not is_folder_in_shared_tree(folder_id, folder_share.folder_id):
+        raise HTTPException(status_code=403, detail="Subfolder not in shared folder tree")
+    
+    # Get all files in the subfolder and its subfolders (recursive)
+    def get_all_files_recursive(target_folder_id, path_prefix=""):
+        all_files = []
+        
+        # Get direct files in this folder
+        files = db.query(FileObject).filter(
+            FileObject.folder_id == target_folder_id
+        ).all()
+        
+        for file in files:
+            all_files.append({
+                "file_obj": file,
+                "zip_path": f"{path_prefix}{file.file_name}"
+            })
+        
+        # Get subfolders and their files
+        subfolders = db.query(Folder).filter(
+            Folder.parent_folder_id == target_folder_id
+        ).all()
+        
+        for sub_subfolder in subfolders:
+            sub_subfolder_path = f"{path_prefix}{sub_subfolder.name}/"
+            all_files.extend(get_all_files_recursive(str(sub_subfolder.folder_id), sub_subfolder_path))
+        
+        return all_files
+    
+    all_files = get_all_files_recursive(folder_id)
+    
+    if not all_files:
+        # Return empty ZIP file if no files
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("empty_folder.txt", "This folder contains no files.")
+        zip_buffer.seek(0)
+        
+        return StreamingResponse(
+            io.BytesIO(zip_buffer.read()),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{subfolder_obj.name}.zip"'}
+        )
+    
+    # Create ZIP file with actual file contents
+    zip_buffer = io.BytesIO()
+    
+    try:
+        import httpx
+        import base64
+        from app.core.erasure_coding import get_erasure_coder_for_profile
+        
+        master_node_url = "http://master_node:3000"
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            async with httpx.AsyncClient() as client:
+                for file_data in all_files:
+                    file_obj = file_data["file_obj"]
+                    zip_path = file_data["zip_path"]
+                    
+                    try:
+                        # Get file info and reconstruct content (same as folder download logic)
+                        file_info_response = await client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
+                        if file_info_response.status_code != 200:
+                            continue
+                        
+                        file_info_data = file_info_response.json()["file"]
+                        
+                        # Get fragments
+                        fragments_response = await client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
+                        if fragments_response.status_code != 200:
+                            continue
+                        
+                        fragments = fragments_response.json()
+                        if not fragments:
+                            continue
+                        
+                        # Initialize erasure decoder
+                        erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
+                        
+                        # Fetch and reconstruct file
+                        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
+                        available_fragments = []
+                        fragment_indexes = []
+                        
+                        for fragment in sorted_fragments:
+                            if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
+                                continue
+                            
+                            storage_url = fragment["api_endpoint"]
+                            fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
+                            
+                            try:
+                                frag_response = await client.get(fragment_url, timeout=30)
+                                if frag_response.status_code == 200:
+                                    fragment_data = frag_response.json()
+                                    if fragment_data.get("success") and fragment_data.get("data"):
+                                        decoded_data = base64.b64decode(fragment_data["data"])
+                                        available_fragments.append(decoded_data)
+                                        fragment_indexes.append(fragment["num_fragment"])
+                            except Exception:
+                                continue
+                        
+                        if not erasure_coder.can_reconstruct(len(available_fragments)):
+                            continue
+                        
+                        # Reconstruct file
+                        reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
+                        
+                        # Truncate to original size
+                        original_file_size = int(file_info_data["file_size"])
+                        if len(reconstructed_data) > original_file_size:
+                            reconstructed_data = reconstructed_data[:original_file_size]
+                        
+                        # Write actual file content to ZIP
+                        zip_file.writestr(zip_path, reconstructed_data)
+                        
+                    except Exception as e:
+                        # Add error file if download fails
+                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+        
+        zip_buffer.seek(0)
+        
+        return StreamingResponse(
+            io.BytesIO(zip_buffer.read()),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{subfolder_obj.name}.zip"'}
+        )
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")

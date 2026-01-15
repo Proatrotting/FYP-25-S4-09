@@ -109,8 +109,10 @@ class ErasureCoder:
             # Get chunk size
             chunk_size = len(available_fragments[0])
             
-            # Reconstruct data byte-by-byte using Reed-Solomon
-            reconstructed_chunks = []
+            # Reconstruct data chunk-by-chunk using Reed-Solomon
+            # Create k bytearrays to hold each data chunk
+            reconstructed_chunks = [bytearray(chunk_size) for _ in range(self.k)]
+            
             for byte_pos in range(chunk_size):
                 # Extract this byte from all fragments
                 encoded_bytes = bytearray(self.n)
@@ -126,10 +128,12 @@ class ErasureCoder:
                 # Handle tuple return value from reedsolo
                 decoded_bytes = decoded_result[0] if isinstance(decoded_result, tuple) else decoded_result
                 
-                # Extract k data bytes
-                reconstructed_chunks.append(decoded_bytes[:self.k])
+                # Distribute each decoded byte to its corresponding chunk at this position
+                for chunk_idx in range(self.k):
+                    reconstructed_chunks[chunk_idx][byte_pos] = decoded_bytes[chunk_idx]
             
-            reconstructed_data = b''.join(reconstructed_chunks)
+            # Concatenate all chunks and convert to bytes
+            reconstructed_data = b''.join(bytes(chunk) for chunk in reconstructed_chunks)
             logger.debug(f"Decoded {len(reconstructed_data)} bytes from {len(available_fragments)} fragments")
             
             return reconstructed_data
