@@ -10,6 +10,7 @@ import hashlib
 import uuid
 import requests
 import httpx
+import logging
 from datetime import datetime, timedelta, timezone
 
 from app.db.session import get_db
@@ -17,6 +18,8 @@ from app.models import Account, FileObject, Folder, FileShare, FolderShare, Shar
 from app.core.security import decode_access_token, verify_password
 from app.core.activity_logger import get_client_ip
 from app.routes.login import oauth2_scheme
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/shares", tags=["File Sharing"])
 
