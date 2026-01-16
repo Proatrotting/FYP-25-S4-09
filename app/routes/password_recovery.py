@@ -61,7 +61,7 @@ def create_password_reset_token(master_db: MasterNodeDB, account_id: str) -> str
         INSERT INTO password_reset_tokens (token, account_id, expires_at, used)
         VALUES ($1, $2, $3, FALSE)
         """,
-        [token, account_id, expires_at],  
+        [token, account_id, expires_at.isoformat()],  
     )
     return token
 
