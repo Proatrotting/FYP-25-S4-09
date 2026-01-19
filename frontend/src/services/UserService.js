@@ -387,18 +387,18 @@ export async function moveFolder({ folderId, newParentFolderId }) {
 
 // ---------- File sharing ----------
 export async function createFileShare({
-  fileId,
-  sharedWithUsername = null,
+  fileid,
+  sharedwithusername = null,
   permissions = "DOWNLOAD",
-  expiresHours = null,
-  requirePassword = false,
+  expireshours = null,
+  requirepassword = false,
 }) {
   const body = {
-    file_id: fileId,
-    shared_with_username: sharedWithUsername,
+    fileid,
+    sharedwithusername,
     permissions,
-    expires_hours: expiresHours,
-    require_password: requirePassword,
+    expireshours,
+    requirepassword,
   };
 
   const response = await authFetch(`${API_BASE_URL}/shares/files/create`, {
@@ -410,23 +410,24 @@ export async function createFileShare({
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to create file share");
   }
-  return result; // { share_url, one_time_password, ... }
+  // result: { shareid, sharetoken, onetimepassword, shareurl, expiresat, permissions }
+  return result;
 }
 
 // ---------- Folder sharing ----------
 export async function createFolderShare({
-  folderId,
-  sharedWithUsername = null,
-  permissions = "DOWNLOAD",     // or "DOWNLOAD" if you support that for folders
-  expiresHours = 24,
-  requirePassword = true,
+  folderid,
+  sharedwithusername = null,
+  permissions = "DOWNLOAD",
+  expireshours = null,
+  requirepassword = false,
 }) {
   const body = {
-    folder_id: folderId,
-    shared_with_username: sharedWithUsername,
+    folderid,
+    sharedwithusername,
     permissions,
-    expires_hours: expiresHours,
-    require_password: requirePassword,
+    expireshours,
+    requirepassword,
   };
 
   const response = await authFetch(`${API_BASE_URL}/shares/folders/create`, {
@@ -438,13 +439,12 @@ export async function createFolderShare({
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to create folder share");
   }
-
-  return result; // ShareResponse
+  return result;
 }
 
 // ---------- Sharing: list "shared with me" ----------
 export async function getFilesSharedWithMe() {
-  const response = await authFetch(`${API_BASE_URL}/shares/with-me`, {
+  const response = await authFetch(`${API_BASE_URL}/shares/files/with-me`, {
     method: "GET",
   });
 
@@ -452,8 +452,18 @@ export async function getFilesSharedWithMe() {
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to load shared files");
   }
+  return result; // array of SharedWithMeResponse
+}
 
-  // result is an array of SharedWithMeResponse
+export async function getFoldersSharedWithMe() {
+  const response = await authFetch(`${API_BASE_URL}/shares/folders/with-me`, {
+    method: "GET",
+  });
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.detail || result.message || "Failed to load shared folders");
+  }
   return result;
 }
 
@@ -474,11 +484,12 @@ export async function searchShareUsers(query) {
 }
 
 // ---------- Sharing: share file with specific user ----------
-export async function shareFileWithUser({ fileId, username, permissions }) {
+export async function shareFileWithUser({ fileid, username, permissions, expireshours = null }) {
   const body = {
-    file_id: fileId,
+    fileid,
     username,
-    permissions, // "VIEW" or "DOWNLOAD"
+    permissions,
+    expireshours,
   };
 
   const response = await authFetch(
@@ -493,8 +504,8 @@ export async function shareFileWithUser({ fileId, username, permissions }) {
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to share file");
   }
-
-  return result; // { message: ... }
+  // { message, shareid, permissions, expiresat }
+  return result;
 }
 
 // ---------- Storage usage ----------

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { getFilesSharedWithMe } from "../../services/UserService";
-import { downloadSharedFileByShareId } from "../../services/SharedService";
 import "../../styles/Users/UserDashboard.css";
 
 const Shared = () => {
@@ -60,21 +59,19 @@ const Shared = () => {
               </tr>
             ) : (
               rows.map((s) => (
-                <tr key={s.share_id}>
-                  <td>{s.file_name}</td>
+                <tr key={s.shareid}>
+                  <td>{s.filename}</td>
                   <td>{s.permissions}</td>
                   <td>
-                    {new Date(s.shared_at).toLocaleDateString()}
-                    {s.expires_at &&
-                      ` (expires ${new Date(
-                        s.expires_at
-                      ).toLocaleDateString()})`}
+                    {new Date(s.sharedat).toLocaleDateString()}
+                    {s.expiresat &&
+                      ` (expires ${new Date(s.expiresat).toLocaleDateString()})`}
                   </td>
                   <td>
                     {s.permissions === "DOWNLOAD" ? (
                       <button
                         className="toolbar-action-btn"
-                        onClick={() => downloadSharedFileByShareId(s.share_id)}
+                        onClick={() => downloadFile(s.fileid, s.filename)}
                       >
                         Download
                       </button>

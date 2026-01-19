@@ -468,9 +468,10 @@ const UserDashboard = () => {
     setShareLoading(true);
     try {
       const res = await shareFileWithUser({
-        fileId: shareData.fileId,
+        fileid: shareData.fileId,
         username: shareUsername.trim(),
         permissions: sharePermissions,
+        expireshours: getExpiresHoursFromOption(publicExpires),
       });
       alert(res.message || "File shared successfully");
       setShareModalOpen(false);
@@ -491,17 +492,17 @@ const UserDashboard = () => {
     const requirePassword = publicPassword.trim().length > 0;
 
     setPublicShareLoading(true);
-    try {
-      const payload = {
-        sharedWithUsername: null,
+    try {     
+      const basePayload = {
+        sharedwithusername: null,
         permissions: sharePermissions,
-        expiresHours,
-        requirePassword,
+        expireshours: getExpiresHoursFromOption(publicExpires),
+        requirepassword: publicPassword.trim().length > 0,
       };
 
       const res = shareData.isFolder
-        ? await createFolderShare({ folderId: shareData.fileId, ...payload })
-        : await createFileShare({ fileId: shareData.fileId, ...payload });
+        ? await createFolderShare({ folderid: shareData.fileId, ...basePayload })
+        : await createFileShare({ fileid: shareData.fileId, ...basePayload });
 
       setPublicShareData(res);
     } catch (err) {
@@ -978,43 +979,38 @@ const UserDashboard = () => {
                       type="button"
                       className="toolbar-action-btn"
                       onClick={() => {
-                        const frontendBase = window.location.origin;
-                        const fullUrl = `${frontendBase}/shares/files/access/${publicShareData.share_token}`;
-
-                        const textToCopy = `${fullUrl}${
-                          publicShareData.one_time_password
-                            ? ` (password: ${publicShareData.one_time_password})`
+                        const textToCopy = `${publicShareData.shareurl}${
+                          publicShareData.onetimepassword
+                            ? ` (password: ${publicShareData.onetimepassword})`
                             : ""
                         }`;
                         navigator.clipboard.writeText(textToCopy).catch(() => {});
                       }}
-                                      >
-                                        Copy Link
-                                      </button>
-                                    )}
+                    >
+                      Copy Link
+                    </button>
+                  )}
                 </div>
 
                 {publicShareData && (
-                  <div style={{ marginTop: 8, fontSize: 13 }} className="share-url-text">
-                    <div>
-                      <strong>URL:</strong>{" "}
-                      <code>{publicShareData.share_url}</code>
+                  <div className="share-url-text" style={{ marginTop: 8, fontSize: 13 }}>
+                      <div>
+                        <strong>URL:</strong> <code>{publicShareData.shareurl}</code>
+                      </div>
+                      {publicShareData.onetimepassword && (
+                        <div>
+                          <strong>Password:</strong>{" "}
+                          <code>{publicShareData.onetimepassword}</code>
+                        </div>
+                      )}
+                      {publicShareData.expiresat && (
+                        <div>
+                          <strong>Expires:</strong>{" "}
+                          {new Date(publicShareData.expiresat).toLocaleString()}
+                        </div>
+                      )}
                     </div>
-                    {publicShareData.one_time_password && (
-                      <div>
-                        <strong>Password:</strong>{" "}
-                        <code>{publicShareData.one_time_password}</code>
-                      </div>
-                    )}
-                    {publicShareData.expires_at && (
-                      <div>
-                        <strong>Expires:</strong>{" "}
-                        {new Date(publicShareData.expires_at).toLocaleString()}
-                      </div>
-                    )}
-                  </div>
                 )}
-              </div>
             </div>
 
             <div className="modal-footer">
@@ -1039,7 +1035,6 @@ const UserDashboard = () => {
             </div>
           </div>
         </div>
-      )}
 
       {openMenuFileId && (
         <div
@@ -1217,6 +1212,8 @@ const UserDashboard = () => {
         </div>
       )}
     </div>
+    )}
+  </div>
   );
 };
 
