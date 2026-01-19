@@ -17,6 +17,7 @@ import requests
 # Python path already configured by container
 
 from app.core.erasure_coding import get_erasure_coder_for_profile
+from app.core.shamir_secret_sharing import reconstruct_key_from_shares, create_key_shares
 from app.master_node_db import MasterNodeDB
 
 # Configure logging
@@ -414,11 +415,210 @@ class RepairWorker:
                 await self.update_job_status(job_id, "COMPLETED")
             else:
                 raise Exception("No fragments were successfully uploaded")
+            
+            # After repairing fragments, check and repair key shares if needed
+            await self.check_and_repair_key_shares(version_id)
         
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Repair job {job_id} failed: {error_msg}")
             await self.update_job_status(job_id, "FAILED", error_msg)
+    
+    async def check_and_repair_key_shares(self, version_id: str):
+        """
+        Check if key shares are missing and repair them if needed.
+        This ensures encryption keys remain recoverable even after node failures.
+        """
+        try:
+            logger.info(f"Checking key shares for version {version_id}")
+            
+            # Get key_id for this version
+            sql_key = """
+                SELECT KEY_ID FROM FILE_KEYS WHERE VERSION_ID = $1
+            """
+            key_result = self.master_db.select(sql_key, [version_id])
+            
+            if not key_result or len(key_result) == 0:
+                logger.warning(f"No encryption key found for version {version_id}")
+                return
+            
+            key_id = key_result[0]["key_id"]
+            logger.info(f"Found key_id: {key_id}")
+            
+            # Get all key shares and check which nodes are still active
+            sql_shares = """
+                SELECT ks.KEY_ID, ks.KEY_SHARE_ID, ks.NODE_ID, ks.FRAGMENT_ID,
+                       ks.SHARE_ADDRESS, ks.SHARE_BYTES, n.IS_ACTIVE, n.API_ENDPOINT
+                FROM KEY_SHARE ks
+                LEFT JOIN NODE n ON ks.NODE_ID = n.NODE_ID
+                WHERE ks.KEY_ID = $1
+                ORDER BY ks.KEY_SHARE_ID
+            """
+            shares = self.master_db.select(sql_shares, [key_id])
+            
+            if not shares:
+                logger.error(f"No key shares found for key_id {key_id}!")
+                return
+            
+            # Separate active and inactive shares
+            active_shares = [s for s in shares if s.get("is_active")]
+            inactive_shares = [s for s in shares if not s.get("is_active")]
+            
+            total_shares = len(shares)
+            active_count = len(active_shares)
+            inactive_count = len(inactive_shares)
+            
+            logger.info(f"Key shares status: {active_count} active, {inactive_count} inactive out of {total_shares} total")
+            
+            # Check if repair is needed (if any shares are on inactive nodes)
+            if inactive_count == 0:
+                logger.info("All key shares are on active nodes. No repair needed.")
+                return
+            
+            # Check if we have enough shares to reconstruct (need 5 for 5-of-7 threshold)
+            threshold = 5
+            if active_count < threshold:
+                logger.error(
+                    f"CRITICAL: Only {active_count} key shares available, need {threshold}. "
+                    f"Cannot reconstruct encryption key! File is unrecoverable!"
+                )
+                return
+            
+            logger.warning(f"Key share repair needed: {inactive_count} shares on failed nodes")
+            
+            # Download active shares from storage nodes
+            logger.info(f"Downloading {active_count} active key shares...")
+            downloaded_shares = []
+            
+            for share in active_shares:
+                share_id = share["key_share_id"]
+                fragment_id = share.get("fragment_id")
+                api_endpoint = share.get("api_endpoint")
+                
+                if not fragment_id or not api_endpoint:
+                    logger.warning(f"Share {share_id} missing fragment_id or endpoint")
+                    continue
+                
+                try:
+                    # Download share from storage node (stored as fragment)
+                    async with httpx.AsyncClient() as client:
+                        url = f"{api_endpoint}/fragments/{fragment_id}"
+                        response = await client.get(url, timeout=30)
+                        
+                        if response.status_code == 200:
+                            fragment_data = response.json()
+                            if fragment_data.get("success") and fragment_data.get("data"):
+                                share_bytes = base64.b64decode(fragment_data["data"])
+                                downloaded_shares.append({
+                                    "share_index": share_id,
+                                    "share_data": share_bytes
+                                })
+                                logger.info(f"Downloaded share {share_id} ({len(share_bytes)} bytes)")
+                            else:
+                                logger.warning(f"Share {share_id} has no data")
+                        else:
+                            logger.warning(f"Failed to download share {share_id}: HTTP {response.status_code}")
+                
+                except Exception as e:
+                    logger.error(f"Error downloading share {share_id}: {e}")
+                    continue
+            
+            if len(downloaded_shares) < threshold:
+                logger.error(f"Only downloaded {len(downloaded_shares)} shares, need {threshold}. Cannot repair.")
+                return
+            
+            logger.info(f"Successfully downloaded {len(downloaded_shares)} shares")
+            
+            # Reconstruct the encryption key from available shares
+            logger.info("Reconstructing encryption key from shares...")
+            try:
+                encryption_key = reconstruct_key_from_shares(downloaded_shares)
+                logger.info(f"Successfully reconstructed encryption key ({len(encryption_key)} bytes)")
+            except Exception as e:
+                logger.error(f"Failed to reconstruct key: {e}")
+                return
+            
+            # Create new 7-share set
+            logger.info("Creating new key share set (7 shares)...")
+            try:
+                new_shares = create_key_shares(encryption_key)
+                logger.info(f"Created {len(new_shares)} new key shares")
+            except Exception as e:
+                logger.error(f"Failed to create new shares: {e}")
+                return
+            
+            # Get available storage nodes for new shares
+            available_nodes = await self.get_available_nodes()
+            if len(available_nodes) < 7:
+                logger.warning(f"Only {len(available_nodes)} nodes available, need 7 for optimal distribution")
+            
+            # Delete old inactive shares and upload new shares
+            logger.info("Redistributing key shares to active nodes...")
+            successful_redistributions = 0
+            
+            for inactive_share in inactive_shares:
+                old_share_id = inactive_share["key_share_id"]
+                
+                # Delete old share record
+                delete_sql = "DELETE FROM KEY_SHARE WHERE KEY_ID = $1 AND KEY_SHARE_ID = $2"
+                self.master_db.execute(delete_sql, [key_id, old_share_id])
+                logger.info(f"Deleted inactive share {old_share_id}")
+                
+                # Upload new share to replacement node
+                if old_share_id - 1 < len(new_shares):
+                    new_share = new_shares[old_share_id - 1]
+                    
+                    # Select a node (prefer nodes without shares)
+                    existing_node_ids = [s["node_id"] for s in active_shares]
+                    preferred_nodes = [n for n in available_nodes if n["node_id"] not in existing_node_ids]
+                    target_nodes = preferred_nodes if preferred_nodes else available_nodes
+                    
+                    if not target_nodes:
+                        logger.error("No available nodes for share redistribution")
+                        continue
+                    
+                    target_node = target_nodes[successful_redistributions % len(target_nodes)]
+                    node_id = target_node["node_id"]
+                    api_endpoint = target_node["api_endpoint"]
+                    
+                    # Upload share as fragment to storage node
+                    fragment_id = str(uuid.uuid4())
+                    share_data = new_share["share_data"]
+                    
+                    upload_success = await self.upload_fragment_to_node(
+                        fragment_id=fragment_id,
+                        fragment_data=share_data,
+                        api_endpoint=api_endpoint,
+                        file_id=f"keyshare_{key_id}",
+                        fragment_order=new_share["share_index"]
+                    )
+                    
+                    if upload_success:
+                        # Insert new share record
+                        insert_sql = """
+                            INSERT INTO KEY_SHARE 
+                            (KEY_ID, KEY_SHARE_ID, NODE_ID, SHARE_BYTES, SHARE_ADDRESS, FRAGMENT_ID)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """
+                        self.master_db.execute(insert_sql, [
+                            key_id,
+                            old_share_id,
+                            node_id,
+                            len(share_data),
+                            f"keyshare/{key_id}/{old_share_id}",
+                            fragment_id
+                        ])
+                        
+                        successful_redistributions += 1
+                        logger.info(f"Redistributed share {old_share_id} to node {node_id}")
+            
+            if successful_redistributions > 0:
+                logger.info(f"Key share repair completed: {successful_redistributions} shares redistributed")
+            else:
+                logger.warning("No key shares were successfully redistributed")
+        
+        except Exception as e:
+            logger.error(f"Error in key share repair: {e}", exc_info=True)
     
     async def run(self):
         """Main worker loop"""

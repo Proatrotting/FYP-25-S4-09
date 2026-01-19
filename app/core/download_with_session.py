@@ -12,6 +12,8 @@ from app.core.session_manager import session_manager, SessionType, SessionStatus
 from app.core.config import get_settings
 from app.core.erasure_coding import get_erasure_coder_for_profile
 from app.core.lazy_repair import LazyRepair
+# Import AES-256 decryption
+from app.core.file_encryption import decrypt_file_data
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -225,11 +227,47 @@ async def process_file_download_with_session(
             logger.info(f"Reconstructing file using {len(available_fragments)} fragments")
             reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
             
+            logger.info(f"Reed-Solomon reconstruction completed: {len(reconstructed_data)} bytes")
+            
+            # Check if file is encrypted and decrypt if necessary
+            is_encrypted = file_info.get("is_encrypted", False)
+            if is_encrypted:
+                try:
+                    logger.info(f"File is encrypted, attempting decryption for account {account_id}")
+                    decrypted_data = decrypt_file_data(
+                        encrypted_data=reconstructed_data,
+                        account_id=account_id,
+                        encryption_metadata=file_info.get("encryption_metadata")
+                    )
+                    
+                    # Verify decrypted file size matches expected original size
+                    expected_original_size = file_info.get("original_file_size")
+                    if expected_original_size and len(decrypted_data) != expected_original_size:
+                        logger.warning(
+                            f"Decrypted file size mismatch: got {len(decrypted_data)}, "
+                            f"expected {expected_original_size}"
+                        )
+                    
+                    logger.info(f"Successfully decrypted file: {len(reconstructed_data)} bytes -> {len(decrypted_data)} bytes")
+                    final_data = decrypted_data
+                    
+                except Exception as decrypt_error:
+                    logger.error(f"File decryption failed: {decrypt_error}")
+                    session.fail()
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"File decryption failed: {str(decrypt_error)}"
+                    )
+            else:
+                # File is not encrypted, return as-is
+                logger.info("File is not encrypted, returning reconstructed data")
+                final_data = reconstructed_data
+            
             # Update final progress
             session.update_progress(session.total_size)
             session.complete()
             
-            logger.info(f"File reconstruction completed: {len(reconstructed_data)} bytes")
+            logger.info(f"File download completed: {len(final_data)} bytes")
             
             # Remove successful sessions after a delay
             import threading
@@ -239,7 +277,7 @@ async def process_file_download_with_session(
                 session_manager.remove_session(session_id)
             threading.Thread(target=remove_later, daemon=True).start()
             
-            return reconstructed_data, session_id
+            return final_data, session_id
             
         except Exception as e:
             logger.error(f"File reconstruction failed: {e}")

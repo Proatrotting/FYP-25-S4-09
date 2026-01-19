@@ -3,11 +3,23 @@ const { Pool } = require('pg');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs').promises;
 const path = require('path');
+const axios = require('axios');
 const app = express();
 
 // Configure Express to handle large payloads (up to 200MB)
 app.use(express.json({ limit: '200mb', parameterLimit: 1000000 }));
 app.use(express.urlencoded({ limit: '200mb', extended: true, parameterLimit: 1000000 }));
+
+// Add request logging middleware
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    if (req.path === '/files' && req.method === 'POST') {
+        console.log('=== FILE CREATION REQUEST ===');
+        console.log('Headers:', JSON.stringify(req.headers, null, 2));
+        console.log('Body keys:', Object.keys(req.body || {}));
+    }
+    next();
+});
 
 // Increase timeout for large uploads
 app.use((req, res, next) => {
@@ -441,6 +453,29 @@ app.get('/nodes', async (req, res) => {
     }
 });
 
+// Get specific node by ID
+app.get('/nodes/:node_id', async (req, res) => {
+    try {
+        const { node_id } = req.params;
+        
+        const result = await query(`
+            SELECT n.*, c.total_bytes, c.used_bytes, c.available_bytes 
+            FROM node n 
+            LEFT JOIN node_capacity c ON n.node_id = c.node_id 
+            WHERE n.node_id = $1
+        `, [node_id]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Node not found' });
+        }
+        
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Error retrieving node:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // Enhanced database query endpoint with better error handling and security
 // Helper function to serialize datetime objects for JSON response
 function serializeRowsForJSON(rows) {
@@ -566,12 +601,20 @@ app.post('/fragments', async (req, res) => {
         if (providedFragmentId) {
             const fragmentId = providedFragmentId;
 
-            // Insert fragment_location for the confirmed fragment write
-            if (nodeId && fragmentAddress) {
-                await query(`
-                    INSERT INTO fragment_location (fragment_id, node_id, fragment_address, bytes, status, stored_at)
-                    VALUES ($1, $2, $3, $4, 'ACTIVE', NOW())
-                `, [fragmentId, nodeId, fragmentAddress, bytes || 0]);
+            // Skip registration for key fragments - they don't belong in fragment_location table
+            // Key fragments are identified by checking if they correspond to encryption key storage
+            const isKeyFragment = fragmentAddress && fragmentAddress.includes('/key_');
+            
+            if (!isKeyFragment) {
+                // Insert fragment_location for the confirmed fragment write (file fragments only)
+                if (nodeId && fragmentAddress) {
+                    await query(`
+                        INSERT INTO fragment_location (fragment_id, node_id, fragment_address, bytes, status, stored_at)
+                        VALUES ($1, $2, $3, $4, 'ACTIVE', NOW())
+                    `, [fragmentId, nodeId, fragmentAddress, bytes || 0]);
+                }
+            } else {
+                console.log(`Skipping master node registration for key fragment: ${fragmentId}`);
             }
 
             return res.json({ success: true, fragmentId });
@@ -804,7 +847,22 @@ app.post('/query/batch', async (req, res) => {
 // File metadata creation endpoint
 app.post('/files', async (req, res) => {
     try {
-        const { account_id, file_name, file_size, logical_path, folder_id, erasure_id } = req.body;
+        const { 
+            account_id, 
+            file_name, 
+            file_size, 
+            logical_path, 
+            folder_id, 
+            erasure_id,
+            // Encryption support fields
+            encryption_metadata,
+            original_file_size,
+            original_file_hash,
+            is_encrypted,
+            // SSS Key Storage fields
+            key_storage_url,
+            key_fragment_id
+        } = req.body;
         
         if (!account_id || !file_name || !file_size || !logical_path) {
             return res.status(400).json({ error: 'Missing required fields: account_id, file_name, file_size, logical_path' });
@@ -813,11 +871,28 @@ app.post('/files', async (req, res) => {
         const fileId = uuidv4();
         const versionId = uuidv4();
         
-        // Create FILE_OBJECTS entry with folder_id
+        // Create FILE_OBJECTS entry with encryption support
         await query(`
-            INSERT INTO FILE_OBJECTS (FILE_ID, ACCOUNT_ID, FILE_NAME, FILE_SIZE, LOGICAL_PATH, FOLDER_ID, UPLOADED_AT)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW())
-        `, [fileId, account_id, file_name, file_size, logical_path, folder_id || null]);
+            INSERT INTO FILE_OBJECTS (
+                FILE_ID, ACCOUNT_ID, FILE_NAME, FILE_SIZE, LOGICAL_PATH, FOLDER_ID, 
+                IS_ENCRYPTED, ENCRYPTION_METADATA, ORIGINAL_FILE_SIZE, ORIGINAL_FILE_HASH, 
+                key_storage_url, key_fragment_id, UPLOADED_AT
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        `, [
+            fileId, 
+            account_id, 
+            file_name, 
+            file_size, 
+            logical_path, 
+            folder_id || null,
+            is_encrypted || false,
+            encryption_metadata ? JSON.stringify(encryption_metadata) : null,
+            original_file_size || null,
+            original_file_hash || null,
+            key_storage_url || null,
+            key_fragment_id || null
+        ]);
         
         // Create FILE_VERSIONS entry - using BYTES instead of FILE_SIZE
         await query(`
@@ -833,6 +908,193 @@ app.post('/files', async (req, res) => {
         });
     } catch (error) {
         console.error('Error creating file metadata:', error);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+});
+
+// Key shares storage endpoint (Shamir's Secret Sharing)
+app.post('/key-shares', async (req, res) => {
+    try {
+        const { version_id, encryption_key, key_shares } = req.body;
+        
+        if (!version_id || !encryption_key || !key_shares || !Array.isArray(key_shares)) {
+            return res.status(400).json({ 
+                error: 'Missing required fields: version_id, encryption_key, key_shares (array)' 
+            });
+        }
+        
+        const keyId = uuidv4();
+        
+        // Store encryption key in FILE_KEYS table
+        await query(`
+            INSERT INTO FILE_KEYS (KEY_ID, VERSION_ID, ENCRYPTION_KEY, KEY_CREATED_AT)
+            VALUES ($1, $2, $3, NOW())
+        `, [keyId, version_id, encryption_key]);
+        
+        console.log(`Created FILE_KEYS entry: ${keyId} for version ${version_id}`);
+        
+        // Get available storage nodes for key share distribution
+        const nodesResult = await query(`
+            SELECT node_id, api_endpoint, hostname FROM (
+                SELECT DISTINCT ON (hostname) node_id, api_endpoint, hostname, heartbeat_at
+                FROM node
+                WHERE node_role = 'STORAGE' AND is_active = true
+                ORDER BY hostname, heartbeat_at DESC
+            ) t
+            WHERE t.heartbeat_at > NOW() - INTERVAL '90 seconds'
+            ORDER BY random()
+            LIMIT $1
+        `, [key_shares.length]);
+        
+        if (nodesResult.rows.length < key_shares.length) {
+            // Rollback FILE_KEYS if we can't distribute shares
+            await query('DELETE FROM FILE_KEYS WHERE KEY_ID = $1', [keyId]);
+            return res.status(503).json({ 
+                error: 'Insufficient storage nodes for key shares', 
+                available: nodesResult.rows.length, 
+                required: key_shares.length 
+            });
+        }
+        
+        // Store key shares across storage nodes
+        const storedShares = [];
+        
+        for (let i = 0; i < key_shares.length; i++) {
+            const share = key_shares[i];
+            const node = nodesResult.rows[i];
+            const shareId = uuidv4();
+            
+            try {
+                // Store key share as a fragment in storage node
+                const storeResponse = await axios.post(`${node.api_endpoint}/fragments`, {
+                    fragmentId: shareId,
+                    data: share.share_data,
+                    bytes: Buffer.from(share.share_data, 'base64').length,
+                    contentHash: `keyshare_${keyId}_${share.share_index}`,
+                    fileId: `keyshare_${keyId}`,
+                    fragmentOrder: share.share_index
+                }, {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 10000
+                });
+                
+                if (storeResponse.status === 200 || storeResponse.status === 201) {
+                    const fragmentAddress = storeResponse.data.fragmentAddress || `key_share_${shareId}`;
+                    
+                    // Record key share location in database with fragment ID
+                    await query(`
+                        INSERT INTO KEY_SHARE (KEY_ID, KEY_SHARE_ID, NODE_ID, SHARE_BYTES, SHARE_ADDRESS, FRAGMENT_ID, CREATED_AT)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                    `, [
+                        keyId,
+                        share.share_index,
+                        node.node_id,
+                        Buffer.from(share.share_data, 'base64').length,
+                        fragmentAddress,
+                        shareId  // Store the fragment UUID for retrieval
+                    ]);
+                    
+                    storedShares.push({
+                        shareIndex: share.share_index,
+                        nodeId: node.node_id,
+                        shareAddress: fragmentAddress
+                    });
+                    
+                    console.log(`Stored key share ${share.share_index} on ${node.node_id}`);
+                }
+            } catch (error) {
+                console.error(`Failed to store key share ${share.share_index} on ${node.node_id}:`, error.message);
+                // Continue with other shares - some shares might still succeed
+            }
+        }
+        
+        if (storedShares.length === 0) {
+            // Cleanup if no shares were stored
+            await query('DELETE FROM FILE_KEYS WHERE KEY_ID = $1', [keyId]);
+            return res.status(500).json({ 
+                error: 'Failed to store any key shares',
+                details: 'All storage node requests failed'
+            });
+        }
+        
+        res.json({ 
+            success: true,
+            keyId: keyId,
+            sharesStored: storedShares.length,
+            totalShares: key_shares.length,
+            shares: storedShares,
+            message: `Successfully stored ${storedShares.length}/${key_shares.length} key shares`
+        });
+        
+    } catch (error) {
+        console.error('Error storing key shares:', error);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+});
+
+// Get key shares for a file version (for download/decryption)
+app.get('/key-shares/:version_id', async (req, res) => {
+    try {
+        const { version_id } = req.params;
+        
+        if (!version_id) {
+            return res.status(400).json({ error: 'Missing required parameter: version_id' });
+        }
+        
+        // Get key_id from FILE_KEYS table
+        const keyResult = await query(`
+            SELECT KEY_ID FROM FILE_KEYS WHERE VERSION_ID = $1
+        `, [version_id]);
+        
+        if (keyResult.rows.length === 0) {
+            return res.status(404).json({ 
+                error: 'No encryption key found for this file version',
+                version_id: version_id
+            });
+        }
+        
+        const keyId = keyResult.rows[0].key_id;
+        
+        // Get all key shares for this key
+        const sharesResult = await query(`
+            SELECT ks.KEY_SHARE_ID, ks.NODE_ID, ks.SHARE_BYTES, ks.SHARE_ADDRESS, ks.FRAGMENT_ID,
+                   n.API_ENDPOINT, n.IS_ACTIVE
+            FROM KEY_SHARE ks
+            JOIN NODE n ON ks.NODE_ID = n.NODE_ID
+            WHERE ks.KEY_ID = $1
+            ORDER BY ks.KEY_SHARE_ID
+        `, [keyId]);
+        
+        if (sharesResult.rows.length === 0) {
+            return res.status(404).json({ 
+                error: 'No key shares found for this encryption key',
+                key_id: keyId
+            });
+        }
+        
+        const shares = sharesResult.rows.map(row => ({
+            key_share_id: parseInt(row.key_share_id),
+            node_id: row.node_id,
+            share_bytes: parseInt(row.share_bytes),
+            share_address: row.share_address,
+            fragment_id: row.fragment_id,  // Include fragment UUID for retrieval
+            api_endpoint: row.api_endpoint,
+            is_active: row.is_active
+        }));
+        
+        const activeShares = shares.filter(s => s.is_active);
+        
+        res.json({
+            success: true,
+            key_id: keyId,
+            version_id: version_id,
+            total_shares: shares.length,
+            active_shares: activeShares.length,
+            shares: shares
+        });
+        
+    } catch (error) {
+        console.error('Error retrieving key shares:', error);
         res.status(500).json({ error: 'Internal server error', details: error.message });
     }
 });
@@ -995,6 +1257,9 @@ app.get('/files/:accountId', async (req, res) => {
                 fo.file_size,
                 fo.logical_path,
                 fo.uploaded_at,
+                fo.is_encrypted,
+                fo.original_file_size,
+                fo.original_file_hash,
                 fv.version_id,
                 fv.erasure_id,
                 fv.content_hash
@@ -1026,6 +1291,12 @@ app.get('/files/info/:fileId', async (req, res) => {
                 fo.file_size,
                 fo.logical_path,
                 fo.uploaded_at,
+                fo.is_encrypted,
+                fo.encryption_metadata,
+                fo.original_file_size,
+                fo.original_file_hash,
+                fo.key_storage_url,
+                fo.key_fragment_id,
                 fv.version_id,
                 fv.erasure_id,
                 fv.content_hash
@@ -1038,9 +1309,21 @@ app.get('/files/info/:fileId', async (req, res) => {
             return res.status(404).json({ error: 'File not found' });
         }
         
+        const fileData = result.rows[0];
+        
+        // Parse encryption_metadata if it exists
+        if (fileData.encryption_metadata) {
+            try {
+                fileData.encryption_metadata = JSON.parse(fileData.encryption_metadata);
+            } catch (e) {
+                console.warn('Failed to parse encryption_metadata JSON:', e);
+                fileData.encryption_metadata = null;
+            }
+        }
+        
         res.json({
             success: true,
-            file: result.rows[0]
+            file: fileData
         });
     } catch (error) {
         console.error('Error retrieving file info:', error);
@@ -1100,6 +1383,98 @@ app.post('/repair-jobs', async (req, res) => {
         
     } catch (error) {
         console.error('Error creating repair job:', error);
+        res.status(500).json({ error: 'Failed to create repair job', details: error.message });
+    }
+});
+
+// Key share health check endpoint
+app.get('/key-shares/health/:version_id', async (req, res) => {
+    const { version_id } = req.params;
+    
+    try {
+        // Get key_id for this version
+        const keyResult = await pool.query(
+            'SELECT KEY_ID FROM FILE_KEYS WHERE VERSION_ID = $1',
+            [version_id]
+        );
+        
+        if (keyResult.rows.length === 0) {
+            return res.status(404).json({ error: 'No encryption key found for this version' });
+        }
+        
+        const key_id = keyResult.rows[0].key_id;
+        
+        // Get all key shares with node status
+        const sharesResult = await pool.query(`
+            SELECT ks.KEY_ID, ks.KEY_SHARE_ID, ks.NODE_ID, ks.FRAGMENT_ID,
+                   n.IS_ACTIVE, n.NODE_ROLE
+            FROM KEY_SHARE ks
+            LEFT JOIN NODE n ON ks.NODE_ID = n.NODE_ID
+            WHERE ks.KEY_ID = $1
+            ORDER BY ks.KEY_SHARE_ID
+        `, [key_id]);
+        
+        const shares = sharesResult.rows;
+        const active_shares = shares.filter(s => s.is_active);
+        const inactive_shares = shares.filter(s => !s.is_active);
+        
+        const threshold = 5; // 5-of-7 threshold
+        const health_status = {
+            key_id: key_id,
+            version_id: version_id,
+            total_shares: shares.length,
+            active_shares: active_shares.length,
+            inactive_shares: inactive_shares.length,
+            threshold_required: threshold,
+            can_reconstruct: active_shares.length >= threshold,
+            repair_needed: inactive_shares.length > 0,
+            health: active_shares.length >= threshold ? 
+                    (inactive_shares.length > 0 ? 'degraded' : 'healthy') : 
+                    'critical',
+            shares: shares.map(s => ({
+                share_id: s.key_share_id,
+                node_id: s.node_id,
+                is_active: s.is_active,
+                fragment_id: s.fragment_id
+            }))
+        };
+        
+        res.json(health_status);
+    } catch (error) {
+        console.error('Error checking key share health:', error);
+        res.status(500).json({ error: 'Failed to check key share health', details: error.message });
+    }
+});
+
+// Trigger key share repair for a specific version
+app.post('/key-shares/repair/:version_id', async (req, res) => {
+    const { version_id } = req.params;
+    
+    try {
+        // Create a repair job that includes key share repair
+        const jobId = uuidv4();
+        
+        await pool.query(`
+            INSERT INTO REPAIR_JOBS 
+            (JOB_ID, VERSION_ID, REASON, PRIORITY, FRAGMENTS_NEEDED, FRAGMENTS_AVAILABLE, STATUS)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+            jobId,
+            version_id,
+            'Manual key share repair triggered',
+            10, // High priority
+            0,  // Not for fragments
+            0,
+            'PENDING'
+        ]);
+        
+        res.json({
+            success: true,
+            job_id: jobId,
+            message: 'Key share repair job created. The repair worker will process it shortly.'
+        });
+    } catch (error) {
+        console.error('Error creating key share repair job:', error);
         res.status(500).json({ error: 'Failed to create repair job', details: error.message });
     }
 });

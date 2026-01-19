@@ -11,6 +11,10 @@ from app.routes.login import oauth2_scheme
 from app.core.config import get_settings
 from app.core.erasure_coding import get_erasure_coder_for_profile, get_erasure_coder_for_account
 from app.core.lazy_repair import LazyRepair
+# Import AES-256 decryption
+from app.core.file_encryption import decrypt_file_data
+from app.core.key_storage import get_key_storage_manager
+from app.core.shamir_secret_sharing import reconstruct_key_from_shares, get_sss_config
 import logging
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -100,11 +104,17 @@ async def list_files(current_account = Depends(get_current_account)):
 
 async def process_file_download(
     file_id: str,
-    account_id: str
+    account_id: str,
+    skip_ownership_check: bool = False
 ) -> bytes:
     """
     Core file download logic that can be called directly without HTTP overhead.
     Returns reconstructed file data as bytes.
+    
+    Args:
+        file_id: ID of the file to download
+        account_id: Account ID for decryption keys
+        skip_ownership_check: If True, skips ownership verification (for shared files)
     """
     # Get file info to verify ownership
     async with httpx.AsyncClient() as client:
@@ -121,8 +131,8 @@ async def process_file_download(
     
     file_info = file_info_response.json()["file"]
     
-    # Check if user owns this file
-    if file_info["account_id"] != account_id:
+    # Check if user owns this file (unless ownership check is skipped for shared files)
+    if not skip_ownership_check and file_info["account_id"] != account_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Get fragment information
@@ -216,14 +226,149 @@ async def process_file_download(
     try:
         reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
         
-        # Truncate to original file size
-        original_file_size = int(file_info["file_size"])
-        if len(reconstructed_data) > original_file_size:
-            reconstructed_data = reconstructed_data[:original_file_size]
-            logger.info(f"Truncated reconstructed data to original size: {original_file_size} bytes")
+        # Truncate to the stored file size (encrypted size)
+        stored_file_size = int(file_info["file_size"])
+        if len(reconstructed_data) > stored_file_size:
+            reconstructed_data = reconstructed_data[:stored_file_size]
         
-        logger.info(f"Successfully reconstructed {len(reconstructed_data)} bytes using {len(available_fragments)} fragments")
-        return reconstructed_data
+        logger.info(f"File reconstructed successfully: {len(reconstructed_data)} bytes")
+        
+        # Check if file is encrypted and decrypt if necessary
+        is_encrypted = file_info.get("is_encrypted", False)
+        if is_encrypted:
+            encryption_metadata = file_info.get("encryption_metadata")
+            version_id = file_info.get("version_id")
+            
+            # Retrieve encryption key shares using Shamir's Secret Sharing
+            if not version_id:
+                logger.error("No version_id available for key retrieval")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="File version information not available"
+                )
+            
+            try:
+                # Query master node for key shares
+                response = requests.get(f"{MASTER_NODE_URL}/key-shares/{version_id}")
+                if response.status_code != 200:
+                    logger.error(f"Failed to retrieve key shares: Status {response.status_code}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to retrieve key shares: {response.text}"
+                    )
+                
+                key_shares_data = response.json()
+                key_shares = key_shares_data.get("shares", [])
+                
+                if not key_shares:
+                    logger.error("No key shares found for file")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="No key shares found for file"
+                    )
+                
+                logger.info(f"Retrieved {len(key_shares)} key shares from master node")
+                
+                # Retrieve share data from storage nodes
+                threshold, num_shares = get_sss_config()
+                retrieved_shares = []
+                
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    for share_info in key_shares:
+                        node_id = share_info["node_id"]
+                        share_address = share_info["share_address"]
+                        fragment_id = share_info.get("fragment_id")  # The UUID used to store the fragment
+                        share_index = share_info["key_share_id"]
+                        
+                        # Get node endpoint
+                        node_response = requests.get(f"{MASTER_NODE_URL}/nodes/{node_id}")
+                        if node_response.status_code != 200:
+                            logger.warning(f"Failed to get node info for {node_id}")
+                            continue
+                        
+                        node_info = node_response.json()
+                        node_endpoint = node_info.get("api_endpoint")
+                        
+                        if not node_endpoint or not fragment_id:
+                            logger.warning(f"No endpoint or fragment_id for node {node_id}")
+                            continue
+                        
+                        try:
+                            # Retrieve share from storage node using fragment_id
+                            share_url = f"{node_endpoint}/fragments/{fragment_id}"
+                            share_response = await client.get(share_url)
+                            
+                            if share_response.status_code == 200:
+                                share_data_b64 = share_response.json().get("data")
+                                share_data = base64.b64decode(share_data_b64)
+                                retrieved_shares.append((share_index, share_data))
+                                logger.info(f"Retrieved key share {share_index} from {node_id}")
+                            else:
+                                logger.warning(f"Failed to retrieve share from {node_id}: {share_response.status_code}")
+                        
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch share from {node_id}: {e}")
+                            continue
+                
+                # Check if we have enough shares to reconstruct
+                if len(retrieved_shares) < threshold:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Not enough key shares to reconstruct. Need {threshold}, got {len(retrieved_shares)}"
+                    )
+                
+                logger.info(f"Reconstructing encryption key from {len(retrieved_shares)} shares (threshold: {threshold})")
+                
+                # Reconstruct the encryption key
+                file_encryption_key = reconstruct_key_from_shares(retrieved_shares, key_length=32)
+                logger.info("Encryption key successfully reconstructed from shares")
+                
+            except HTTPException:
+                raise
+            except Exception as key_error:
+                logger.error(f"Failed to retrieve and reconstruct encryption key: {key_error}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to retrieve encryption key: {str(key_error)}"
+                )
+            
+            # Decrypt using the reconstructed key
+            try:
+                logger.info(f"Decrypting file for account {account_id}")
+                decrypted_data = decrypt_file_data(
+                    encrypted_data=reconstructed_data,
+                    account_id=account_id,
+                    encryption_metadata=encryption_metadata,
+                    file_info=file_info,
+                    file_key=file_encryption_key
+                )
+                
+                # Verify decrypted file size matches expected original size
+                expected_original_size = file_info.get("original_file_size")
+                if expected_original_size and len(decrypted_data) != int(expected_original_size):
+                    logger.error(
+                        f"Decrypted file size mismatch: got {len(decrypted_data)}, "
+                        f"expected {expected_original_size}"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="File decryption resulted in unexpected file size"
+                    )
+                
+                logger.info(f"File decrypted successfully")
+                return decrypted_data
+                
+            except Exception as decrypt_error:
+                logger.error(f"SSS decryption failed: {decrypt_error}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"File decryption failed: {str(decrypt_error)}"
+                )
+        else:
+            # File is not encrypted, return as-is
+            logger.info("File is not encrypted, returning reconstructed data")
+            return reconstructed_data
+            
     except Exception as e:
         logger.error(f"Reed-Solomon reconstruction failed: {e}")
         raise HTTPException(

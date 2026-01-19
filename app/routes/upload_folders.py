@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import logging
@@ -6,6 +6,8 @@ import requests
 import os
 import traceback
 import uuid
+import base64
+import json
 
 from app.core.security import decode_access_token
 from app.routes.login import oauth2_scheme
@@ -249,7 +251,7 @@ def create_folder_structure_direct(
     return folder_map
 
 
-def upload_file_direct(
+async def upload_file_direct(
     filename: str,
     file_data_base64: str,
     folder_id: str,
@@ -262,7 +264,7 @@ def upload_file_direct(
     Returns upload result with success status and details.
     """
     try:
-        result = process_file_upload(
+        result = await process_file_upload(
             filename=filename,
             file_data_base64=file_data_base64,
             content_type=content_type,
@@ -298,8 +300,14 @@ def upload_file_direct(
 
 @router.post("/upload-folder", response_model=FolderUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_folder(
-    upload_data: FolderUploadRequest,
     request: Request,
+    # Multipart form fields
+    folder_name: Optional[str] = Form(None),
+    parent_folder_id: Optional[str] = Form(None),
+    erasure_id: Optional[str] = Form("MEDIUM"),
+    file_metadata: Optional[str] = Form(None),  # JSON string
+    # Legacy JSON body
+    upload_data: Optional[FolderUploadRequest] = None,
     current_account = Depends(get_current_account),
     token: str = Depends(oauth2_scheme),
     master_db: MasterNodeDB = Depends(get_master_db)
@@ -307,34 +315,97 @@ async def upload_folder(
     """
     Upload an entire folder with its structure to distributed storage.
     
+    Supports TWO methods:
+    1. Multipart/form-data (PREFERRED) - Binary files with progress tracking + encryption
+    2. JSON with base64 (legacy) - Backward compatibility
+    
     This endpoint:
     1. Creates folder hierarchy using direct database calls (fast!)
-    2. Uploads each file using existing upload endpoint with erasure coding
-    
-    Benefits:
-    - No circular HTTP dependencies
-    - Fast folder creation via direct DB access
-    - Reuses file upload logic for storage distribution
+    2. Uploads each file with AES-256-GCM encryption + SSS key storage
     """
     try:
         account_id = current_account["account_id"]
-        
-        # Extract token string for file upload API calls
         token_str = token.credentials if hasattr(token, "credentials") else token
         
-        logger.info(f"Starting folder upload: {upload_data.folder_name} with {len(upload_data.files)} files for account {account_id}")
+        # Detect upload method
+        content_type_header = request.headers.get("content-type", "")
+        
+        if "multipart/form-data" in content_type_header:
+            # Method 1: Multipart upload (NEW - with encryption)
+            if not folder_name or not file_metadata:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="folder_name and file_metadata required for multipart upload"
+                )
+            
+            # Parse file metadata JSON
+            try:
+                metadata_list = json.loads(file_metadata)
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file_metadata JSON"
+                )
+            
+            # Extract files from form data
+            form = await request.form()
+            file_entries = []
+            
+            for i, meta in enumerate(metadata_list):
+                file_key = f"file_{i}"
+                if file_key not in form:
+                    logger.warning(f"Missing file for index {i}")
+                    continue
+                
+                file_obj = form[file_key]
+                file_contents = await file_obj.read()
+                file_data_b64 = base64.b64encode(file_contents).decode('utf-8')
+                
+                file_entries.append(FileInFolder(
+                    filename=meta['filename'],
+                    data=file_data_b64,
+                    relative_path=meta['relative_path'],
+                    content_type=meta.get('content_type', 'application/octet-stream')
+                ))
+            
+            actual_folder_name = folder_name
+            actual_parent_folder_id = parent_folder_id if parent_folder_id and parent_folder_id != '' else None
+            actual_erasure_id = erasure_id
+            
+            logger.info(f"Multipart folder upload: {actual_folder_name} with {len(file_entries)} files")
+            
+        else:
+            # Method 2: JSON with base64 (LEGACY)
+            if not upload_data:
+                try:
+                    body = await request.json()
+                    upload_data = FolderUploadRequest(**body)
+                except Exception:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid request: expected multipart/form-data or JSON body"
+                    )
+            
+            file_entries = upload_data.files
+            actual_folder_name = upload_data.folder_name
+            actual_parent_folder_id = upload_data.parent_folder_id
+            actual_erasure_id = upload_data.erasure_id
+            
+            logger.info(f"Base64 JSON folder upload: {actual_folder_name} with {len(file_entries)} files")
+        
+        logger.info(f"Starting folder upload: {actual_folder_name} with {len(file_entries)} files for account {account_id}")
         
         # Step 1: Create folder structure using direct database calls (FAST!)
         try:
             folder_map = create_folder_structure_direct(
-                root_folder_name=upload_data.folder_name,
-                files=upload_data.files,
-                parent_folder_id=upload_data.parent_folder_id,
+                root_folder_name=actual_folder_name,
+                files=file_entries,
+                parent_folder_id=actual_parent_folder_id,
                 account_id=account_id,
                 master_db=master_db
             )
             
-            root_folder_id = folder_map[upload_data.folder_name]
+            root_folder_id = folder_map[actual_folder_name]
             logger.info(f"Created folder structure with {len(folder_map)} folders")
             
         except Exception as e:
@@ -350,7 +421,7 @@ async def upload_folder(
         files_failed = 0
         errors = []
         
-        for file_data in upload_data.files:
+        for file_data in file_entries:
             try:
                 # Determine folder ID for this file
                 path_parts = file_data.relative_path.split('/')
@@ -365,11 +436,11 @@ async def upload_folder(
                 logger.info(f"Uploading {file_data.relative_path} to folder {folder_id}")
                 
                 # Call upload logic directly (no HTTP overhead!)
-                result = upload_file_direct(
+                result = await upload_file_direct(
                     filename=file_data.filename,
                     file_data_base64=file_data.data,  # Pass as-is (already base64)
                     folder_id=folder_id,
-                    erasure_id=upload_data.erasure_id,
+                    erasure_id=actual_erasure_id,
                     content_type=file_data.content_type,
                     account_id=account_id
                 )
@@ -412,13 +483,13 @@ async def upload_folder(
         
         success = files_failed == 0
         
-        logger.info(f"Folder upload completed: {files_uploaded}/{len(upload_data.files)} files uploaded successfully")
+        logger.info(f"Folder upload completed: {files_uploaded}/{len(file_entries)} files uploaded successfully")
         
         return FolderUploadResponse(
             success=success,
             root_folder_id=root_folder_id,
-            folder_name=upload_data.folder_name,
-            total_files=len(upload_data.files),
+            folder_name=actual_folder_name,
+            total_files=len(file_entries),
             files_uploaded=files_uploaded,
             files_failed=files_failed,
             upload_results=upload_results,

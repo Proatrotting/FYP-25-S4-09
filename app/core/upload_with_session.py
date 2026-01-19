@@ -13,6 +13,8 @@ from fastapi import HTTPException, status
 from app.core.session_manager import session_manager, SessionType, SessionStatus
 from app.core.config import get_settings
 from app.core.erasure_coding import get_erasure_coder_for_profile
+# Import AES-256 encryption
+from app.core.file_encryption import encrypt_file_data
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -32,25 +34,51 @@ def process_file_upload_with_session(
     """
     # Decode the base64 file data
     file_data = base64.b64decode(file_data_base64)
-    file_size = len(file_data)
+    original_file_size = len(file_data)
     
-    # Create upload session
+    # Create upload session with original file size
     session = session_manager.create_session(
         session_type=SessionType.UPLOAD,
         account_id=account_id,
         filename=filename,
-        total_size=file_size
+        total_size=original_file_size
     )
     
     try:
-        # Generate file hash
-        file_hash = hashlib.sha256(file_data).hexdigest()
+        # Generate file hash (before encryption for integrity verification)
+        original_file_hash = hashlib.sha256(file_data).hexdigest()
+        logger.info(f"Original file hash: {original_file_hash}")
         
         # Check for cancellation
         if session.is_cancelled():
             session.status = SessionStatus.CANCELLED
             session_manager.remove_session(session.session_id)
             raise HTTPException(status_code=409, detail="Upload cancelled")
+        
+        # Encrypt file data using AES-256-GCM
+        try:
+            encrypted_file_data, encryption_metadata = encrypt_file_data(
+                data=file_data,
+                account_id=account_id,
+                additional_data={
+                    "filename": filename,
+                    "content_type": content_type,
+                    "original_hash": original_file_hash
+                }
+            )
+            encrypted_file_size = len(encrypted_file_data)
+            logger.info(f"File encrypted: {original_file_size} bytes -> {encrypted_file_size} bytes")
+        except Exception as e:
+            logger.error(f"File encryption failed: {e}")
+            session.fail()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"File encryption failed: {str(e)}"
+            )
+        
+        # Use encrypted data for storage
+        file_data = encrypted_file_data
+        file_size = encrypted_file_size
         
         # Create file metadata in master node
         logical_path = f"/{filename}"
@@ -60,10 +88,15 @@ def process_file_upload_with_session(
         create_file_payload = {
             "account_id": account_id,
             "file_name": filename,
-            "file_size": file_size,
+            "file_size": encrypted_file_size,  # Store encrypted size
             "logical_path": logical_path,
             "folder_id": folder_id,
-            "erasure_id": erasure_id
+            "erasure_id": erasure_id,
+            # Add encryption metadata
+            "encryption_metadata": encryption_metadata,
+            "original_file_size": original_file_size,
+            "original_file_hash": original_file_hash,
+            "is_encrypted": True
         }
         
         # Create file metadata
@@ -238,11 +271,13 @@ def process_file_upload_with_session(
             "file_id": file_id,
             "version_id": version_id,
             "filename": filename,
-            "file_size": file_size,
+            "file_size": original_file_size,  # Return original file size to user
             "content_type": content_type,
             "upload_status": upload_status,
             "fragments_stored": fragments_stored,
-            "erasure_profile": erasure_id
+            "erasure_profile": erasure_id,
+            "encrypted_size": encrypted_file_size,
+            "is_encrypted": True
         }
     
     except HTTPException:

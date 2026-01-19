@@ -999,86 +999,24 @@ async def download_shared_file_stream(
             detail="File not found"
         )
     
-    # Reconstruct file from fragments (same as normal download)
+    # Use secure download process (handles decryption, Reed-Solomon, SSS)
     try:
-        # Get file info to verify it exists
-        async with httpx.AsyncClient() as client:
-            file_info_response = await client.get(f"{MASTER_NODE_URL}/files/info/{file_id}")
+        # Call the same secure download function used for regular downloads
+        # This handles: fragment reconstruction, SSS key retrieval, and decryption
+        decrypted_data = await process_file_download(
+            file_id=file_id,
+            account_id=file_obj.account_id,  # Owner's account for decryption
+            skip_ownership_check=True  # This is a shared file
+        )
         
-        if file_info_response.status_code == 404:
-            raise HTTPException(status_code=404, detail="File not found")
-        
-        if file_info_response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve file info"
-            )
-        
-        file_info = file_info_response.json()["file"]
-        
-        # Get fragment information
-        async with httpx.AsyncClient() as client:
-            fragments_response = await client.get(f"{MASTER_NODE_URL}/fragments/{file_id}")
-        
-        if fragments_response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve fragments"
-            )
-        
-        fragments = fragments_response.json()
-        
-        if not fragments:
-            raise HTTPException(status_code=404, detail="File fragments not found")
-        
-        # Initialize erasure decoder
-        erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
-        
-        # Download available fragments from storage nodes
-        available_fragments = []
-        fragment_indexes = []
-        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-        
-        async with httpx.AsyncClient() as client:
-            for fragment in sorted_fragments:
-                if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                    continue
-                    
-                node_endpoint = fragment["api_endpoint"]
-                fragment_url = f"{node_endpoint}/fragments/{fragment['fragment_id']}"
-                
-                try:
-                    frag_response = await client.get(fragment_url, timeout=30)
-                    if frag_response.status_code == 200:
-                        fragment_data = frag_response.json()
-                        if fragment_data.get("success") and fragment_data.get("data"):
-                            decoded_data = base64.b64decode(fragment_data["data"])
-                            available_fragments.append(decoded_data)
-                            fragment_indexes.append(fragment["num_fragment"])
-                except httpx.RequestError:
-                    continue
-        
-        # Check if we have enough fragments
-        if not erasure_coder.can_reconstruct(len(available_fragments)):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}"
-            )
-        
-        # Reconstruct original file
-        reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-        
-        # Truncate to original file size
-        original_file_size = int(file_info["file_size"])
-        if len(reconstructed_data) > original_file_size:
-            reconstructed_data = reconstructed_data[:original_file_size]
+        logger.info(f"Shared file {file_id} downloaded and decrypted: {len(decrypted_data)} bytes")
         
         return Response(
-            content=reconstructed_data,
+            content=decrypted_data,
             media_type="application/octet-stream",
             headers={
                 "Content-Disposition": f'attachment; filename="{file_obj.file_name}"',
-                "Content-Length": str(len(reconstructed_data))
+                "Content-Length": str(len(decrypted_data))
             }
         )
         
@@ -1697,7 +1635,8 @@ async def download_shared_file(
                 detail="Password required"
             )
         
-        if not verify_password(password, file_share.password_hash):
+        # Verify password using SHA-256 (matching hash_password function)
+        if hash_password(password) != file_share.password_hash:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid password"
@@ -1731,149 +1670,35 @@ async def download_shared_file(
     file_share.used_at = datetime.now(timezone.utc)
     db.commit()
     
-    # Get file from master node/storage system
+    # Use secure download process (handles decryption, Reed-Solomon, SSS)
     try:
-        master_node_url = "http://master_node:3000"
+        from app.routes.download_files import process_file_download
         
-        # Get file info to verify it exists
-        async with httpx.AsyncClient() as client:
-            file_info_response = await client.get(f"{master_node_url}/files/info/{file_share.file_id}")
-            
-            if file_info_response.status_code == 404:
-                raise HTTPException(status_code=404, detail="File not found in storage")
-            
-            if file_info_response.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to retrieve file info: {file_info_response.text}"
-                )
-            
-            file_info = file_info_response.json()["file"]
-            
-            # Get fragment information
-            fragments_response = await client.get(f"{master_node_url}/fragments/{file_share.file_id}")
-            
-            if fragments_response.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to retrieve fragments: {fragments_response.text}"
-                )
-            
-            fragments = fragments_response.json()
-            
-            if not fragments:
-                raise HTTPException(status_code=404, detail="File fragments not found")
-            
-            # Import the necessary modules for file reconstruction
-            from app.core.erasure_coding import get_erasure_coder_for_profile
-            import logging
-            import base64
-            
-            logger = logging.getLogger(__name__)
-            
-            # Initialize erasure decoder
-            try:
-                erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
-                logger.info(f"Using Reed-Solomon profile {file_info['erasure_id']} for shared download")
-            except Exception as e:
-                logger.error(f"Failed to initialize erasure decoder: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to initialize erasure decoder: {str(e)}"
-                )
-            
-            # Reconstruct the file content using Reed-Solomon decoding
-            try:
-                # Sort fragments by fragment number
-                sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-                available_fragments = []
-                fragment_indexes = []
-                
-                # Fetch fragment data from storage nodes
-                for fragment in sorted_fragments:
-                    fragment_url = None  # Initialize fragment_url
-                    try:
-                        if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                            logger.warning(f"Fragment missing required fields: {fragment}")
-                            continue
-                        
-                        # Use internal Docker network addresses for storage nodes
-                        node_endpoint = fragment["api_endpoint"]
-                        # Since we're running inside Docker, use the internal network address directly
-                        storage_url = node_endpoint
-                        
-                        # Request fragment data from storage node (same pattern as download_files.py)
-                        fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
-                        
-                        logger.info(f"Requesting fragment {fragment['num_fragment']} from {fragment_url}")
-                        
-                        frag_response = await client.get(fragment_url, timeout=30)
-                        
-                        if frag_response.status_code == 200:
-                            # Parse JSON response from storage node
-                            fragment_data = frag_response.json()
-                            if fragment_data.get("success") and fragment_data.get("data"):
-                                # Decode base64 fragment data
-                                decoded_data = base64.b64decode(fragment_data["data"])
-                                available_fragments.append(decoded_data)
-                                fragment_indexes.append(fragment["num_fragment"])
-                                logger.info(f"Successfully retrieved fragment {fragment['num_fragment']} ({len(decoded_data)} bytes)")
-                            else:
-                                logger.warning(f"Storage node returned empty data for fragment {fragment['fragment_id']}: {fragment_data}")
-                        else:
-                            logger.warning(f"Storage node failed to retrieve fragment {fragment['fragment_id']}: {frag_response.status_code} - {frag_response.text}")
-                    except Exception as e:
-                        if fragment_url:
-                            logger.warning(f"Failed to fetch fragment {fragment['fragment_id']} from {fragment_url}: {e}")
-                        else:
-                            logger.warning(f"Failed to process fragment {fragment.get('fragment_id', 'unknown')}: {e}")
-                        continue
-                
-                # Check if we have enough fragments for reconstruction
-                logger.info(f"Retrieved {len(available_fragments)} fragments out of {len(sorted_fragments)} total fragments")
-                logger.info(f"Fragment indexes: {fragment_indexes}")
-                
-                if not erasure_coder.can_reconstruct(len(available_fragments)):
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}"
-                    )
-                
-                # Reconstruct original file using Reed-Solomon decoding
-                reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-                
-                # Truncate to original file size to remove any padding artifacts
-                original_file_size = int(file_info["file_size"])
-                if len(reconstructed_data) > original_file_size:
-                    reconstructed_data = reconstructed_data[:original_file_size]
-                    logger.info(f"Truncated reconstructed data to original size: {original_file_size} bytes")
-                
-                logger.info(f"Successfully reconstructed file {file_obj.file_name} ({len(reconstructed_data)} bytes)")
-                
-            except Exception as e:
-                logger.error(f"Failed to reconstruct file: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to reconstruct file: {str(e)}"
-                )
-            
-            # Create a streaming response
-            def generate():
-                yield reconstructed_data
-            
-            return StreamingResponse(
-                generate(),
-                media_type="application/octet-stream",
-                headers={
-                    "Content-Disposition": f"attachment; filename=\"{file_obj.file_name}\"",
-                    "Content-Length": str(len(reconstructed_data))
-                }
-            )
-            
+        # Call the same secure download function used for regular downloads
+        # This handles: fragment reconstruction, SSS key retrieval, and decryption
+        decrypted_data = await process_file_download(
+            file_id=file_share.file_id,
+            account_id=file_obj.account_id,  # Owner's account for decryption
+            skip_ownership_check=True  # This is a shared file
+        )
+        
+        logger.info(f"Shared file {file_share.file_id} downloaded and decrypted: {len(decrypted_data)} bytes")
+        
+        return Response(
+            content=decrypted_data,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_obj.file_name}"',
+                "Content-Length": str(len(decrypted_data))
+            }
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Download failed: {str(e)}"
+            detail=f"Download error: {str(e)}"
         )
 
 # Google Drive-style user sharing endpoints
@@ -2172,82 +1997,31 @@ async def download_user_shared_file(
     if not file_obj:
         raise HTTPException(status_code=404, detail="File not found")
     
-    # Reuse the same file reconstruction logic from shared-download
-    # (This could be refactored into a shared function)
+    # Use secure download process (handles decryption, Reed-Solomon, SSS)
     try:
-        from fastapi.responses import StreamingResponse
-        import httpx
-        master_node_url = "http://master_node:3000"
+        from app.routes.download_files import process_file_download
         
-        async with httpx.AsyncClient() as client:
-            # Get file info
-            file_info_response = await client.get(f"{master_node_url}/files/info/{file_share.file_id}")
-            if file_info_response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to retrieve file info")
-            
-            file_info = file_info_response.json()["file"]
-            
-            # Get fragments
-            fragments_response = await client.get(f"{master_node_url}/fragments/{file_share.file_id}")
-            if fragments_response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to retrieve fragments")
-            
-            fragments = fragments_response.json()
-            if not fragments:
-                raise HTTPException(status_code=404, detail="File fragments not found")
-            
-            # Import reconstruction modules
-            from app.core.erasure_coding import get_erasure_coder_for_profile
-            import base64
-            
-            # Initialize erasure decoder
-            erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
-            
-            # Fetch and reconstruct file (same logic as shared-download)
-            sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-            available_fragments = []
-            fragment_indexes = []
-            
-            for fragment in sorted_fragments:
-                if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                    continue
-                
-                storage_url = fragment["api_endpoint"]
-                fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
-                
-                try:
-                    frag_response = await client.get(fragment_url, timeout=30)
-                    if frag_response.status_code == 200:
-                        fragment_data = frag_response.json()
-                        if fragment_data.get("success") and fragment_data.get("data"):
-                            decoded_data = base64.b64decode(fragment_data["data"])
-                            available_fragments.append(decoded_data)
-                            fragment_indexes.append(fragment["num_fragment"])
-                except Exception:
-                    continue
-            
-            if not erasure_coder.can_reconstruct(len(available_fragments)):
-                raise HTTPException(status_code=500, detail="Not enough fragments for reconstruction")
-            
-            # Reconstruct file
-            reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-            
-            # Truncate to original size
-            original_file_size = int(file_info["file_size"])
-            if len(reconstructed_data) > original_file_size:
-                reconstructed_data = reconstructed_data[:original_file_size]
-            
-            def generate():
-                yield reconstructed_data
-            
-            return StreamingResponse(
-                generate(),
-                media_type="application/octet-stream",
-                headers={
-                    "Content-Disposition": f"attachment; filename=\"{file_obj.file_name}\"",
-                    "Content-Length": str(len(reconstructed_data))
-                }
-            )
+        # Call the same secure download function used for regular downloads
+        # This handles: fragment reconstruction, SSS key retrieval, and decryption
+        decrypted_data = await process_file_download(
+            file_id=str(file_share.file_id),
+            account_id=file_obj.account_id,  # Owner's account for decryption
+            skip_ownership_check=True  # This is a shared file
+        )
+        
+        logger.info(f"User-shared file {file_share.file_id} downloaded and decrypted: {len(decrypted_data)} bytes")
+        
+        def generate():
+            yield decrypted_data
+        
+        return StreamingResponse(
+            generate(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{file_obj.file_name}\"",
+                "Content-Length": str(len(decrypted_data))
+            }
+        )
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
@@ -2382,77 +2156,29 @@ async def download_file_from_user_shared_folder(
     if str(file_obj.folder_id) != str(folder_share.folder_id):
         raise HTTPException(status_code=403, detail="File not in shared folder")
     
-    # Reconstruct and download the file using same logic as shared-download
+    # Use secure download process (handles decryption, Reed-Solomon, SSS)
     try:
-        import httpx
-        import base64
-        from app.core.erasure_coding import get_erasure_coder_for_profile
+        from app.routes.download_files import process_file_download
         
-        master_node_url = "http://master_node:3000"
+        # Call the same secure download function used for regular downloads
+        # This handles: fragment reconstruction, SSS key retrieval, and decryption
+        decrypted_data = await process_file_download(
+            file_id=file_id,
+            account_id=file_obj.account_id,  # Owner's account for decryption
+            skip_ownership_check=True  # This is a shared file in a folder
+        )
         
-        async with httpx.AsyncClient() as client:
-            # Get file info
-            file_info_response = await client.get(f"{master_node_url}/files/info/{file_id}")
-            if file_info_response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to retrieve file info")
-            
-            file_info = file_info_response.json()["file"]
-            
-            # Get fragments
-            fragments_response = await client.get(f"{master_node_url}/fragments/{file_id}")
-            if fragments_response.status_code != 200:
-                raise HTTPException(status_code=500, detail="Failed to retrieve fragments")
-            
-            fragments = fragments_response.json()
-            if not fragments:
-                raise HTTPException(status_code=404, detail="File fragments not found")
-            
-            # Initialize erasure decoder
-            erasure_coder = get_erasure_coder_for_profile(file_info["erasure_id"])
-            
-            # Fetch and reconstruct file
-            sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-            available_fragments = []
-            fragment_indexes = []
-            
-            for fragment in sorted_fragments:
-                if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                    continue
-                
-                storage_url = fragment["api_endpoint"]
-                fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
-                
-                try:
-                    frag_response = await client.get(fragment_url, timeout=30)
-                    if frag_response.status_code == 200:
-                        fragment_data = frag_response.json()
-                        if fragment_data.get("success") and fragment_data.get("data"):
-                            decoded_data = base64.b64decode(fragment_data["data"])
-                            available_fragments.append(decoded_data)
-                            fragment_indexes.append(fragment["num_fragment"])
-                except Exception:
-                    continue
-            
-            if not erasure_coder.can_reconstruct(len(available_fragments)):
-                raise HTTPException(status_code=500, detail="Not enough fragments for reconstruction")
-            
-            # Reconstruct file
-            reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-            
-            # Truncate to original size
-            original_file_size = int(file_info["file_size"])
-            if len(reconstructed_data) > original_file_size:
-                reconstructed_data = reconstructed_data[:original_file_size]
-            
-            def generate():
-                yield reconstructed_data
-            
-            return StreamingResponse(
+        logger.info(f"User-shared file {file_id} downloaded and decrypted: {len(decrypted_data)} bytes")
+        
+        def generate():
+            yield decrypted_data
+        
+        return StreamingResponse(
                 generate(),
                 media_type="application/octet-stream",
                 headers={
                     "Content-Disposition": f"attachment; filename=\"{file_obj.file_name}\"",
-                    "Content-Length": str(len(reconstructed_data))
+                    "Content-Length": str(len(decrypted_data))
                 }
             )
             

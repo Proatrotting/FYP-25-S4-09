@@ -1,6 +1,24 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import logging
+import sys
+
+# Configure logging to ensure all logs appear in docker logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Ensure logs go to stdout
+    ]
+)
+
+# Set the root logger level
+logging.getLogger().setLevel(logging.INFO)
+
+# Also ensure uvicorn logs are visible
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 
 from app.routes.login import router as auth_router
 from app.routes.userprofiles import router as userprofiles_router

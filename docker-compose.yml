@@ -93,7 +93,7 @@ services:
   fastapi:
     build:
       context: .
-      dockerfile: ./app/Dockerfile
+      dockerfile: Dockerfile
     container_name: app
     environment:
       DATABASE_URL: postgresql://user:password@postgres_db:5432/database
@@ -102,6 +102,7 @@ services:
       SECRET_KEY: your-secret-key-here
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      PYTHONUNBUFFERED: "1"  # Ensure Python output is not buffered
     ports:
       - "8004:8000"
     volumes:
@@ -113,6 +114,11 @@ services:
     depends_on:
       master_node:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   # Repair Worker
   repair-worker:
@@ -177,7 +183,8 @@ services:
     working_dir: /workspace
     command: python app/active_repair_service.py
     environment:
-      ACTIVE_REPAIR_INTERVAL: 30
+      ACTIVE_REPAIR_INTERVAL: 300  # Scan every 5 minutes (300 seconds)
+      MAX_REPAIR_JOBS_PER_SCAN: 50  # Limit jobs created per scan
       ACTIVE_REPAIR_SERVICE_ID: active-repair-service-1
       MASTER_NODE_URL: http://master_node:3000
       POSTGRES_HOST: postgres_db

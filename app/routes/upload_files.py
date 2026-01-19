@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
@@ -12,6 +12,11 @@ import traceback
 
 # Import Reed-Solomon erasure coding
 from app.core.erasure_coding import get_erasure_coder_for_account, get_erasure_coder_for_profile
+
+# Import AES-256 encryption
+from app.core.file_encryption import encrypt_file_data, get_file_encryption
+from app.core.key_storage import get_key_storage_manager
+from app.core.shamir_secret_sharing import create_key_shares, get_sss_config
 
 # Remove SQLAlchemy dependencies since we're using master node API
 from app.core.security import decode_access_token
@@ -37,11 +42,26 @@ class FileUploadResponse(BaseModel):
     file_id: str
     version_id: str
     filename: str
-    file_size: int
+    file_size: int  # Original file size
     content_type: str
     upload_status: str
     fragments_stored: int
     erasure_profile: str
+    encrypted_size: int  # Size after encryption
+    is_encrypted: bool
+
+class FileUploadWithSessionResponse(BaseModel):
+    session_id: str
+    file_id: str
+    version_id: str
+    filename: str
+    file_size: int  # Original file size
+    content_type: str
+    upload_status: str
+    fragments_stored: int
+    erasure_profile: str
+    encrypted_size: int  # Size after encryption
+    is_encrypted: bool
 
 
 class FileInfo(BaseModel):
@@ -96,7 +116,7 @@ def get_current_account(token=Depends(oauth2_scheme)):
     token_str = token.credentials if hasattr(token, "credentials") else token
     return get_current_account_from_master(token_str)
 
-def process_file_upload(
+async def process_file_upload(
     filename: str,
     file_data_base64: str,
     content_type: str,
@@ -110,11 +130,56 @@ def process_file_upload(
     """
     # Decode the base64 file data
     file_data = base64.b64decode(file_data_base64)
-    file_size = len(file_data)
+    original_file_size = len(file_data)
     
-    # Generate file hash
-    file_hash = hashlib.sha256(file_data).hexdigest()
+    # Generate file hash (before encryption for integrity verification)
+    original_file_hash = hashlib.sha256(file_data).hexdigest()
     
+    # Generate unique encryption key for this file
+    encryption_handler = get_file_encryption()
+    file_encryption_key = encryption_handler.generate_file_key()
+    
+    # Encrypt file data using AES-256-GCM with per-file key
+    try:
+        encrypted_file_data, encryption_metadata, returned_key = encrypt_file_data(
+            data=file_data,
+            account_id=account_id,
+            additional_data={
+                "filename": filename,
+                "content_type": content_type,
+                "original_hash": original_file_hash
+            },
+            file_key=file_encryption_key
+        )
+        encrypted_file_size = len(encrypted_file_data)
+        logger.info(f"File encrypted successfully: {filename} ({original_file_size} -> {encrypted_file_size} bytes)")
+    except Exception as e:
+        logger.error(f"File encryption failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"File encryption failed: {str(e)}"
+        )
+    
+    # Use encrypted data for storage
+    file_data = encrypted_file_data
+    file_size = encrypted_file_size
+    
+    # Split encryption key using Shamir's Secret Sharing
+    try:
+        logger.info(f"Splitting encryption key using Shamir's Secret Sharing for file {filename}")
+        key_shares = create_key_shares(file_encryption_key)
+        threshold, num_shares = get_sss_config()
+        logger.info(f"Created {len(key_shares)} key shares with {threshold}-of-{num_shares} threshold")
+    except Exception as e:
+        logger.error(f"Failed to split encryption key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to split encryption key: {str(e)}"
+        )
+    
+    # Will store key_id and shares after file metadata is created
+    key_shares_for_storage = key_shares
+
     # Create file metadata in master node
     logical_path = f"/{filename}"
     if folder_id:
@@ -123,10 +188,15 @@ def process_file_upload(
     create_file_payload = {
         "account_id": account_id,
         "file_name": filename,
-        "file_size": file_size,
+        "file_size": encrypted_file_size,  # Store encrypted size
         "logical_path": logical_path,
         "folder_id": folder_id,
-        "erasure_id": erasure_id
+        "erasure_id": erasure_id,
+        # Add encryption metadata
+        "encryption_metadata": encryption_metadata,
+        "original_file_size": original_file_size,
+        "original_file_hash": original_file_hash,
+        "is_encrypted": True
     }
     
     # Create file metadata
@@ -141,6 +211,40 @@ def process_file_upload(
     file_metadata = response.json()
     file_id = file_metadata["fileId"]
     version_id = file_metadata["versionId"]
+    
+    logger.info(f"File metadata created with ID: {file_id}")
+    
+    # Store encryption key shares using Shamir's Secret Sharing
+    try:
+        # Store key shares in database via master node
+        key_shares_payload = {
+            "version_id": version_id,
+            "encryption_key": encryption_handler.key_to_string(file_encryption_key),
+            "key_shares": [
+                {
+                    "share_index": share_idx,
+                    "share_data": base64.b64encode(share_data).decode('utf-8')
+                }
+                for share_idx, share_data in key_shares_for_storage
+            ]
+        }
+        
+        response = requests.post(f"{MASTER_NODE_URL}/key-shares", json=key_shares_payload)
+        if response.status_code not in [200, 201]:
+            logger.error(f"Failed to store key shares: Status {response.status_code}, Response: {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to store key shares: {response.text}"
+            )
+        
+        logger.info(f"Stored {len(key_shares_for_storage)} key shares for file {file_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to store key shares: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to store key shares: {str(e)}"
+        )
     
     # Get erasure profile and initialize Reed-Solomon encoder
     erasure_coder = get_erasure_coder_for_profile(erasure_id)
@@ -240,31 +344,89 @@ def process_file_upload(
         "file_id": file_id,
         "version_id": version_id,
         "filename": filename,
-        "file_size": file_size,
+        "file_size": original_file_size,  # Return original file size to user
         "content_type": content_type,
         "upload_status": upload_status,
         "fragments_stored": fragments_stored,
-        "erasure_profile": erasure_id
+        "erasure_profile": erasure_id,
+        "encrypted_size": encrypted_file_size,
+        "is_encrypted": True
     }
 
 
 @router.post("/upload", response_model=FileUploadResponse, status_code=status.HTTP_201_CREATED)
-def upload_file(
-    upload_data: FileUploadRequest,
+async def upload_file(
     request: Request,
+    # Multipart form fields (for XMLHttpRequest)
+    file: Optional[UploadFile] = File(None),
+    filename: Optional[str] = Form(None),
+    folder_id: Optional[str] = Form(None),
+    erasure_id: Optional[str] = Form("MEDIUM"),
+    # JSON body fallback (for base64 uploads)
+    upload_data: Optional[FileUploadRequest] = None,
     current_account = Depends(get_current_account)
 ):
     """
     Upload a file to the distributed storage system using the new master node schema.
+    
+    Supports TWO input methods:
+    1. Multipart/form-data (XMLHttpRequest with FormData) - PREFERRED for progress tracking
+    2. JSON with base64 data (legacy/backward compatibility)
+    
     Files are processed with erasure coding and distributed across storage nodes.
     """
     try:
-        result = process_file_upload(
-            filename=upload_data.filename,
-            file_data_base64=upload_data.data,
-            content_type=upload_data.content_type,
-            folder_id=upload_data.folder_id,
-            erasure_id=upload_data.erasure_id,
+        # Detect input method
+        content_type_header = request.headers.get("content-type", "")
+        
+        if "multipart/form-data" in content_type_header:
+            # Method 1: Multipart upload (XMLHttpRequest)
+            if not file:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No file provided in multipart request"
+                )
+            
+            # Read raw file bytes
+            file_contents = await file.read()
+            file_data_base64 = base64.b64encode(file_contents).decode('utf-8')
+            
+            # Use form fields
+            actual_filename = filename or file.filename or "unnamed_file"
+            actual_content_type = file.content_type or "application/octet-stream"
+            actual_folder_id = folder_id if folder_id and folder_id != '' else None
+            actual_erasure_id = erasure_id or "MEDIUM"
+            
+            logger.info(f"Multipart upload: {actual_filename} ({len(file_contents)} bytes)")
+            
+        else:
+            # Method 2: JSON with base64 (backward compatibility)
+            if not upload_data:
+                # Try to parse JSON body manually
+                try:
+                    body = await request.json()
+                    upload_data = FileUploadRequest(**body)
+                except Exception:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid request: expected multipart/form-data or JSON body"
+                    )
+            
+            file_data_base64 = upload_data.data
+            actual_filename = upload_data.filename
+            actual_content_type = upload_data.content_type
+            actual_folder_id = upload_data.folder_id
+            actual_erasure_id = upload_data.erasure_id
+            
+            logger.info(f"Base64 JSON upload: {actual_filename}")
+        
+        # Process upload using unified logic
+        result = await process_file_upload(
+            filename=actual_filename,
+            file_data_base64=file_data_base64,
+            content_type=actual_content_type,
+            folder_id=actual_folder_id,
+            erasure_id=actual_erasure_id,
             account_id=current_account["account_id"]
         )
         return FileUploadResponse(**result)
@@ -274,6 +436,40 @@ def upload_file(
         raise
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading file: {str(e)}",
+        )
+
+
+@router.post("/upload-with-session", response_model=FileUploadWithSessionResponse, status_code=status.HTTP_201_CREATED)
+def upload_file_with_session(
+    upload_data: FileUploadRequest,
+    request: Request,
+    current_account = Depends(get_current_account)
+):
+    """
+    Upload a file with session tracking for cancellation support.
+    Returns session_id that can be used to cancel the upload.
+    """
+    from app.core.upload_with_session import process_file_upload_with_session
+    
+    try:
+        result = process_file_upload_with_session(
+            filename=upload_data.filename,
+            file_data_base64=upload_data.data,
+            content_type=upload_data.content_type,
+            folder_id=upload_data.folder_id,
+            erasure_id=upload_data.erasure_id,
+            account_id=current_account["account_id"]
+        )
+        return FileUploadWithSessionResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading file with session: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -10,7 +10,7 @@ services:
       NODE_PORT: 3000
       HEARTBEAT_INTERVAL: 30000
       STORAGE_PATH: /data/master_node
-      # Simplified PostgreSQL Connection
+      # Google Cloud SQL PostgreSQL Connection (Node.js format)
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
@@ -20,7 +20,7 @@ services:
       POSTGRES_MIN_CONNECTIONS: 5
       POSTGRES_SSL: "true"
     ports:
-      - "8000:3000"
+      - "8001:3000"
     volumes:
       - master_node_data:/data
     networks:
@@ -49,6 +49,7 @@ services:
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 30
       ENVIRONMENT: production
+      PYTHONUNBUFFERED: "1"
     ports:
       - "8004:8000"
     networks:
@@ -66,7 +67,7 @@ services:
         parallelism: 1
         delay: 10s
 
-  # Storage Nodes (7 replicas distributed across worker nodes)
+  # Storage Nodes (12 replicas distributed across worker nodes)
   storage_node:
     image: aiess/storage-node:latest
     environment:
@@ -80,19 +81,20 @@ services:
     networks:
       - storage_network
     deploy:
-      replicas: 7
+      replicas: 12
       placement:
         constraints:
           - node.role == worker
+        max_replicas_per_node: 2
       restart_policy:
         condition: on-failure
         delay: 10s
         max_attempts: 5
 
-  # Repair Worker
+  # Repair Worker (with key share repair support)
   repair_worker:
     image: aiess/fastapi-backend:latest
-    command: python /workspace/app/repair_worker.py
+    command: python app/repair_worker.py
     environment:
       MASTER_NODE_URL: http://master_node:3000
       REPAIR_INTERVAL: 60
@@ -118,12 +120,38 @@ services:
   # Heartbeat Monitor
   heartbeat_monitor:
     image: aiess/fastapi-backend:latest
-    command: python /workspace/app/heartbeat_monitor.py
+    command: python app/heartbeat_monitor.py
     environment:
       MASTER_NODE_URL: http://master_node:3000
       HEARTBEAT_CHECK_INTERVAL: 30
       HEARTBEAT_TIMEOUT: 45
       MONITOR_ID: heartbeat-monitor-1
+      POSTGRES_HOST: 34.143.181.179
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_DB: fyp-storage
+    networks:
+      - storage_network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+
+  # Active Repair Service
+  active_repair_service:
+    image: aiess/fastapi-backend:latest
+    command: python app/active_repair_service.py
+    environment:
+      ACTIVE_REPAIR_INTERVAL: 300  # Scan every 5 minutes
+      MAX_REPAIR_JOBS_PER_SCAN: 50
+      ACTIVE_REPAIR_SERVICE_ID: active-repair-service-1
+      MASTER_NODE_URL: http://master_node:3000
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres

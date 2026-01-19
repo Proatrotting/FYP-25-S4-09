@@ -23,6 +23,7 @@ pluggy==1.6.0
 psycopg2-binary==2.9.11
 pyasn1==0.6.1
 pycparser==2.23
+python-multipart==0.0.20
 reedsolo==1.7.0
 pydantic==2.12.4
 pydantic-settings==2.12.0
