@@ -27,6 +27,11 @@
   margin: 4px 0;
 }
 
+.empty-queue {
+  grid-column: 1 / -1;  /* Span all columns */
+  font-style: italic;
+}
+
 @media (max-width: 768px) {
   .public-share-container {
     padding: 16px;           /* avoid card touching screen edges */

@@ -41,9 +41,6 @@ const UploadQueue = () => {
     setIsDraggingHandle(true);
     e.preventDefault();
   };
-  // Similar touchmove/end...
-
-  if (uploadQueue.length === 0 || isHidden) return null;
 
   return (
     <div ref={barRef} className="upload-queue-container" style={{ height: `${height}px` }}>
