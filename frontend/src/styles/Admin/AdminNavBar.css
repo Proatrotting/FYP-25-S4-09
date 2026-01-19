@@ -117,7 +117,12 @@
 }
 
 /* Links inherit color from nav-item */
-.admin-nav-item a {
+.admin-nav-item a,
+.admin-nav-item a:link,
+.admin-nav-item a:visited,
+.admin-nav-item a:hover,
+.admin-nav-item a:active,
+.admin-nav-item a:focus {
   text-decoration: none;
   color: inherit;
   display: inline-flex;
