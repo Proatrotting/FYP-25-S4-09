@@ -484,6 +484,22 @@ const UserDashboard = () => {
     }
   };
 
+  const getExpiresHoursFromOption = (value) => {
+    switch (value) {
+      case "1h":
+        return 1;
+      case "24h":
+        return 24;
+      case "1w":
+        return 24 * 7;
+      case "1m":
+        return 24 * 30;
+      case "never":
+      default:
+        return null; // backend: no expiration
+    }
+  };
+
   // Handle creating public share link
   const handleCreatePublicLink = async () => {
     if (!shareData) return;
