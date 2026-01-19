@@ -20,7 +20,7 @@ services:
       POSTGRES_MIN_CONNECTIONS: 5
       POSTGRES_SSL: "true"
     ports:
-      - "8001:3000"
+      - "8000:3000"
     volumes:
       - master_node_data:/data
     networks:
