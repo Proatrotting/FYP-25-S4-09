@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Outlet } from "react-router-dom";
 import UsersNavBar from "./UsersNavBar";
+import UploadQueue from "./UploadQueue";
+import { UploadProvider } from './UploadContext';
 import { getStorageUsage } from "../../services/UserService";
 
 const UserLayout = () => {
@@ -40,14 +42,19 @@ const UserLayout = () => {
   }, [refreshUsage]);
 
   return (
-    <UsersNavBar
-      storageUsage={storageUsage}
-      loadingUsage={loadingUsage}
-      usageError={usageError}
-    >
-      {/* Provide refreshUsage to all nested routes */}
-      <Outlet context={{ refreshUsage }} />
-    </UsersNavBar>
+    <UploadProvider>  {/* Wrap everything for queue context */}
+      <UsersNavBar
+        storageUsage={storageUsage}
+        loadingUsage={loadingUsage}
+        usageError={usageError}
+      >
+        {/* Routed content */}
+        <Outlet context={{ refreshUsage }} />
+        
+        {/* Fixed upload queue at bottom */}
+        <UploadQueue />
+      </UsersNavBar>
+    </UploadProvider>
   );
 };
 

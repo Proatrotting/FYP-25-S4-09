@@ -168,39 +168,39 @@ export async function uploadFolderApi({ folderName, files, parentFolderId = null
 }
 
 // ---------- File upload ----------
-export async function uploadFile({ file, folderId = null, erasureId = "MEDIUM" }) {
-  const toBase64 = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;             // "data:...;base64,AAAA"
-        const base64 = result.split(",")[1];      // keep base64 only
-        resolve(base64);
-      };
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
+export async function uploadFile({ file, folderId = null, erasureId = "MEDIUM" }, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE_URL}/files/upload`);
 
-  const base64Data = await toBase64(file);
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('filename', file.name);
+    formData.append('folder_id', folderId || '');
+    formData.append('erasure_id', erasureId);
 
-  const payload = {
-    filename: file.name,
-    data: base64Data,
-    content_type: file.type || "application/octet-stream",
-    folder_id: folderId,          // string or null; backend expects str | None
-    erasure_id: erasureId,        // "LOW" | "MEDIUM" | "HIGH"
-  };
+    // Auth header from token
+    const token = getAccessToken();
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
-  const response = await authFetch(`${API_BASE_URL}/files/upload`, {
-    method: "POST",
-    body: JSON.stringify(payload),
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const progress = (e.loaded / e.total) * 100;
+        onProgress?.(progress);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        reject(new Error('Upload failed'));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(formData);
   });
-
-  const result = await response.json();
-  if (!response.ok) {
-    throw new Error(result.detail || result.message || "Failed to upload file");
-  }
-  return result; // FileUploadResponse
 }
 
 // ---------- File list ----------

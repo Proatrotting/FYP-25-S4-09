@@ -229,31 +229,44 @@ const UserDashboard = () => {
     }
   };
 
-  const handleFileChange = async (e) => {
-    const selectedFiles = Array.from(e.target.files || []);
-    if (selectedFiles.length === 0) return;
+  const { addToQueue, updateQueueItem, removeFromQueue } = useUploadQueue();
 
+  // Simple time estimator (improve with avg speed tracking later)
+  const estimateTime = (progress, size) => {
+    const remaining = ((100 - progress) / 100) * size;
+    const avgSpeed = 500000; // 500KB/s fallback
+    const seconds = remaining / avgSpeed;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleFileChange = async (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    if (selectedFiles.length === 0) return;
     setIsLoading(true);
     try {
-      // Upload sequentially; you can parallelize later if needed
       for (const file of selectedFiles) {
-        // eslint-disable-next-line no-await-in-loop
-        await uploadFile({
-          file,
-          folderId: currentFolderId,
-          erasureId: erasureLevel,
-        });
+        const queueId = addToQueue(file, currentFolderId, erasureLevel);  // NEW
+        try {
+          await uploadFile({ file, folderId: currentFolderId, erasureId: erasureLevel }, (progress) => {
+            updateQueueItem(queueId, { progress, status: 'uploading', timeLeft: estimateTime(progress, file.size) });
+          });
+          updateQueueItem(queueId, { status: 'success' });
+          setTimeout(() => removeFromQueue(queueId), 3000);
+        } catch (err) {
+          updateQueueItem(queueId, { status: 'error' });
+        }
       }
-
-      // After all uploads, refresh list once
-      const data = await listFiles();
+      // Refresh list after all
+      const data = await listFiles(/* currentFolderId if supported */);
       setFiles(data);
     } catch (err) {
       console.error(err);
-      alert(err.message || "Failed to upload one or more files");
+      alert('Failed to upload one or more files');
     } finally {
       setIsLoading(false);
-      e.target.value = ""; // allow selecting same files again
+      e.target.value = '';  // Reset input
     }
   };
 
@@ -391,14 +404,28 @@ const UserDashboard = () => {
     setIsLoading(true);
     try {
       for (const file of droppedFiles) {
-        // eslint-disable-next-line no-await-in-loop
-        await uploadFile({
-          file,
-          folderId: currentFolderId,
-          erasureId: erasureLevel,
-        });
+        const queueId = addToQueue(file, currentFolderId, erasureLevel);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await uploadFile(
+            { file, folderId: currentFolderId, erasureId: erasureLevel },
+            (progress) => {
+              updateQueueItem(queueId, {
+                progress,
+                status: 'uploading',
+                timeLeft: estimateTime(progress, file.size)
+              });
+            }
+          );
+          updateQueueItem(queueId, { status: 'success' });
+          setTimeout(() => removeFromQueue(queueId), 3000);
+        } catch (uploadErr) {
+          updateQueueItem(queueId, { status: 'error' });
+          // Re-throw to trigger outer catch
+          throw uploadErr;
+        }
       }
-      const data = await listFiles(); // or listFiles(currentFolderId) if you filter by folder
+      const data = await listFiles(); // or listFiles(currentFolderId)
       setFiles(data);
     } catch (err) {
       console.error(err);

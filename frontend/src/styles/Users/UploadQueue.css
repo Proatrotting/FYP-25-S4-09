@@ -1,21 +1,17 @@
-/* Upload queue bar */
-.upload-queue-bar {
-  margin-top: auto;
-  padding: 12px 16px;
-  background-color: #ffffff;
-  border-radius: 10px;
-  border: 1px solid #e5e7eb;
+.upload-queue-container {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: #fff; border-top: 1px solid #e5e7eb; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+  overflow-y: auto; z-index: 1001; transition: height 0.2s;
 }
-
-.upload-queue-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.upload-queue-columns {
-  display: grid;
-  grid-template-columns: 2fr 1fr 2fr 1fr;
-  font-size: 12px;
-  color: #6b7280;
-}
+.upload-queue-header { display: flex; justify-content: space-between; padding: 12px; font-weight: 600; border-bottom: 1px solid #f3f4f6; }
+.drag-handle { cursor: ns-resize; font-size: 16px; padding: 4px; }
+.upload-queue-columns { display: grid; grid-template-columns: 2fr 1fr 2fr 1fr auto; gap: 12px; padding: 8px 12px; font-weight: 500; color: #6b7280; }
+.upload-queue-list { max-height: calc(100% - 120px); overflow-y: auto; }
+.queue-row { display: grid; grid-template-columns: 2fr 1fr 2fr 1fr auto; gap: 12px; padding: 8px 12px; align-items: center; border-top: 1px solid #f9fafb; }
+.progress-bar { height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #10b981, #059669); transition: width 0.3s; }
+.status { font-size: 12px; text-transform: capitalize; }
+.status.success { color: #10b981; }
+.status.error { color: #ef4444; }
+/* Mobile swipe/drag adjustments */
+@media (max-width: 768px) { /* full-width slide */ }
