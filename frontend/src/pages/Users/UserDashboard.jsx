@@ -8,6 +8,7 @@ import { createFolder, listFolders, moveFolder,
          searchShareUsers, shareFileWithUser,
          binDeleteFile, binDeleteFolder, uploadFolderApi,
          downloadFolderZip} from "../../services/UserService";
+import { useUploadQueue } from "../../components/Users/UploadContext";
 import { Tooltip } from "./Tooltip";
 
 const UserDashboard = () => {
