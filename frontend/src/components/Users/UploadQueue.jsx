@@ -6,7 +6,7 @@ const UploadQueue = () => {
   const { uploadQueue, removeFromQueue } = useUploadQueue();
   const [height, setHeight] = useState(80); // min 80px
   const [isDraggingHandle, setIsDraggingHandle] = useState(false);
-  const [isHidden, setIsHidden] = useState(false);
+  const [setIsHidden] = useState(false);
   const barRef = useRef(null);
 
   const handleMouseDown = useCallback((e) => {
