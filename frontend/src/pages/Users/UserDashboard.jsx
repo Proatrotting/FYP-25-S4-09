@@ -488,16 +488,16 @@ const UserDashboard = () => {
   const handleCreatePublicLink = async () => {
     if (!shareData) return;
 
-    const expiresHours = getExpiresHoursFromOption(publicExpires);
-    const requirePassword = publicPassword.trim().length > 0;
+    const expireshours = getExpiresHoursFromOption(publicExpires);
+    const requirepassword = publicPassword.trim().length > 0;
 
     setPublicShareLoading(true);
-    try {     
+    try {
       const basePayload = {
         sharedwithusername: null,
         permissions: sharePermissions,
-        expireshours: getExpiresHoursFromOption(publicExpires),
-        requirepassword: publicPassword.trim().length > 0,
+        expireshours,
+        requirepassword,
       };
 
       const res = shareData.isFolder
@@ -510,22 +510,6 @@ const UserDashboard = () => {
       alert(err.message || "Failed to create public share link");
     } finally {
       setPublicShareLoading(false);
-    }
-  };
-
-  const getExpiresHoursFromOption = (value) => {
-    switch (value) {
-      case "1h":
-        return 1;
-      case "24h":
-        return 24;
-      case "1w":
-        return 24 * 7;
-      case "1m":
-        return 24 * 30;
-      case "never":
-      default:
-        return null; // backend: no expiration
     }
   };
 
