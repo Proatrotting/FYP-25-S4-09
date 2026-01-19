@@ -135,3 +135,52 @@ export async function promoteToSysadmin({ account_id, username }) {
 
   return response.json();
 }
+
+// ---------- Nodes status ----------
+
+export async function listNodes() {
+  const url = `${API_BASE_URL}/sysadmin/nodes`;
+
+  const response = await authFetch(url, { method: "GET" });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || "Failed to fetch nodes");
+  }
+
+  return response.json();
+}
+
+export async function markNodeActive(node_id) {
+  const url = `${API_BASE_URL}/sysadmin/nodes/mark-active`;
+  const body = JSON.stringify({ node_id });
+
+  const response = await authFetch(url, {
+    method: "POST",
+    body,
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || "Failed to mark node active");
+  }
+
+  return response.json();
+}
+
+export async function markNodeInactive(node_id) {
+  const url = `${API_BASE_URL}/sysadmin/nodes/mark-inactive`;
+  const body = JSON.stringify({ node_id });
+
+  const response = await authFetch(url, {
+    method: "POST",
+    body,
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || "Failed to mark node inactive");
+  }
+
+  return response.json();
+}
