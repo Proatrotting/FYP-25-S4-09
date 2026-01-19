@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getFilesSharedWithMe } from "../../services/UserService";
+import { getFilesSharedWithMe, downloadFile} from "../../services/UserService";
 import "../../styles/Users/UserDashboard.css";
 
 const Shared = () => {
