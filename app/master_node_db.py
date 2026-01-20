@@ -2,6 +2,32 @@
 import requests
 import os
 from typing import Any, Dict, List, Optional
+from datetime import date, datetime
+
+try:
+    # If this module is used inside FastAPI, jsonable_encoder is the safest encoder.
+    from fastapi.encoders import jsonable_encoder  # type: ignore
+except Exception:  # pragma: no cover
+    jsonable_encoder = None
+
+
+def _json_safe(value: Any) -> Any:
+    """
+    Convert common non-JSON-serializable Python types into JSON-safe primitives.
+
+    This prevents `requests.post(..., json=payload)` from crashing when params contain
+    `datetime`, `date`, etc.
+    """
+    if jsonable_encoder is not None:
+        return jsonable_encoder(value)
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 class MasterNodeDB:
     """Database interface that connects to master node instead of direct database"""
@@ -17,7 +43,7 @@ class MasterNodeDB:
         try:
             payload = {
                 "sql": sql,
-                "params": params or []
+                "params": _json_safe(params or [])
             }
             
             response = requests.post(self.query_endpoint, json=payload, timeout=10)

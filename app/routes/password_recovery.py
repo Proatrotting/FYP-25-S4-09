@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, EmailStr
@@ -54,12 +54,12 @@ def create_password_reset_token(master_db: MasterNodeDB, account_id: str) -> str
     Create and persist a password reset token.
     """
     token = str(uuid.uuid4())
-    expires_at = datetime.utcnow() + timedelta(minutes=RESET_TOKEN_EXPIRY_MINUTES)
+    expires_at = datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(minutes=RESET_TOKEN_EXPIRY_MINUTES)
 
     master_db.execute(
         """
-        INSERT INTO password_reset_tokens (token, account_id, expires_at, used)
-        VALUES ($1, $2, $3, FALSE)
+        INSERT INTO password_reset_tokens (token_hash, account_id, expires_at)
+        VALUES ($1, $2, $3)
         """,
         [token, account_id, expires_at.isoformat()],  
     )
@@ -69,9 +69,9 @@ def create_password_reset_token(master_db: MasterNodeDB, account_id: str) -> str
 def get_reset_token(master_db: MasterNodeDB, token: str):
     rows = master_db.select(
         """
-        SELECT token, account_id, expires_at, used
+        SELECT token_hash, account_id, expires_at, used_at
         FROM password_reset_tokens
-        WHERE token = $1
+        WHERE token_hash = $1
         """,
         [token],
     )
@@ -173,7 +173,7 @@ def reset_password_from_token(
             )
 
         token_row = get_reset_token(master_db, body.token)
-        if not token_row or token_row["used"]:
+        if not token_row or token_row["used_at"]:  # If used_at is not null, it's been used
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid or used reset token",
@@ -184,7 +184,9 @@ def reset_password_from_token(
         if isinstance(expires_at, str):
             expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
         
-        if expires_at < datetime.utcnow():  # ✅ FIXED
+        # Ensure both datetimes are timezone-aware for comparison
+        current_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+        if expires_at < current_time:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Reset token has expired",
@@ -224,7 +226,7 @@ def reset_password_from_token(
 
         # Mark token as used
         master_db.execute(
-            "UPDATE password_reset_tokens SET used = TRUE WHERE token = $1",
+            "UPDATE password_reset_tokens SET used_at = NOW() WHERE token_hash = $1",
             [body.token],
         )
 
