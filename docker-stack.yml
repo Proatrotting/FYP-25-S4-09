@@ -14,7 +14,7 @@ services:
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
       POSTGRES_DB: fyp-storage
       POSTGRES_MAX_CONNECTIONS: 25
       POSTGRES_MIN_CONNECTIONS: 5
@@ -103,7 +103,7 @@ services:
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
       POSTGRES_DB: fyp-storage
     networks:
       - storage_network
@@ -129,7 +129,7 @@ services:
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
       POSTGRES_DB: fyp-storage
     networks:
       - storage_network
@@ -155,7 +155,7 @@ services:
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "P2s|0muoOkIfVH/j"
+      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
       POSTGRES_DB: fyp-storage
     networks:
       - storage_network
