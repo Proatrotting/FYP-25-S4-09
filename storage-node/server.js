@@ -6,7 +6,27 @@ const path = require('path');
 const os = require('os');
 const app = express();
 
-// Get container's IP address on the overlay network
+// ============================================================================
+// CRITICAL FIX: Fetch VM external IP from GCP metadata for cross-project Swarm
+// ============================================================================
+async function getVMExternalIP() {
+    try {
+        const response = await axios.get(
+            'http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip',
+            { 
+                headers: { 'Metadata-Flavor': 'Google' },
+                timeout: 3000 
+            }
+        );
+        console.log(`✅ Found VM external IP from GCP metadata: ${response.data}`);
+        return response.data;
+    } catch (error) {
+        console.warn('⚠️  Could not fetch VM external IP from GCP metadata:', error.message);
+        return null;
+    }
+}
+
+// Get container's IP address on the overlay network (FALLBACK ONLY)
 function getContainerIP() {
     const interfaces = os.networkInterfaces();
     
@@ -44,15 +64,11 @@ const MASTER_NODE_HOST = process.env.MASTER_NODE_HOST || 'master_node';
 const MASTER_NODE_PORT = process.env.MASTER_NODE_PORT || 3000;
 const MASTER_NODE_URL = `http://${MASTER_NODE_HOST}:${MASTER_NODE_PORT}`;
 
-// Get container IP for registration - THIS IS THE KEY FIX!
-const CONTAINER_IP = getContainerIP();
-// CRITICAL FIX: Use NODE_HOSTNAME env var FIRST, fallback to IP, then UUID
-const NODE_HOSTNAME = process.env.NODE_HOSTNAME || CONTAINER_IP || `storage-node-${uuidv4().slice(0, 8)}`;
+// Global variable to store the effective hostname (set during startup)
+let EFFECTIVE_HOSTNAME = null;
 
-// CRITICAL FIX: Use hostname as NODE_ID to prevent duplicate registrations on restart
-// This ensures the same physical node always has the same ID
-const NODE_ID = process.env.NODE_ID || NODE_HOSTNAME;
-
+// Node configuration - NODE_ID should be deterministic
+const NODE_ID = process.env.NODE_ID || `storage-node-${uuidv4().slice(0, 8)}`;
 const NODE_PORT = process.env.NODE_PORT || 3000;
 const NODE_ROLE = process.env.NODE_ROLE || 'STORAGE';
 
@@ -63,8 +79,8 @@ const HEARTBEAT_INTERVAL = parseInt(process.env.HEARTBEAT_INTERVAL) || 10000;
 
 async function registerWithMaster(){
     try {
-        // Use IP address for API endpoint instead of hostname!
-        const apiEndpoint = `http://${NODE_HOSTNAME}:${NODE_PORT}`;
+        // Use the effective hostname that was determined at startup
+        const apiEndpoint = `http://${EFFECTIVE_HOSTNAME}:${NODE_PORT}`;
         
         console.log(`Registering with master node...`);
         console.log(`API Endpoint: ${apiEndpoint}`);
@@ -74,12 +90,12 @@ async function registerWithMaster(){
             nodeId: NODE_ID,
             apiEndpoint: apiEndpoint,
             nodeRole: NODE_ROLE,
-            hostname: NODE_HOSTNAME
+            hostname: EFFECTIVE_HOSTNAME
         });
         
         if (response.data.success) {
             console.log(`✅ Storage Node ${NODE_ID} registered with master node.`);
-            console.log('Hostname/IP:', NODE_HOSTNAME);
+            console.log('Hostname/IP:', EFFECTIVE_HOSTNAME);
             console.log('Role:', NODE_ROLE);
             console.log('Master Node:', MASTER_NODE_URL);
         } else {
@@ -143,7 +159,7 @@ app.get('/health', (req, res) => {
     res.json({
         status: 'Healthy',
         nodeId: NODE_ID,
-        hostname: NODE_HOSTNAME,
+        hostname: EFFECTIVE_HOSTNAME,
         role: NODE_ROLE,
     });
 });
@@ -155,7 +171,7 @@ app.post('/fragments', async (req, res) => {
             return res.status(400).json({ error: 'Missing fragmentId or data' });
         }
 
-        // Decide object key — keep it deterministic so we can locate fragments later
+        // Decide object key – keep it deterministic so we can locate fragments later
         const fileId = req.body.fileId || 'unknown';
         const fragmentOrder = req.body.fragmentOrder !== undefined ? req.body.fragmentOrder : '0';
         const key = path.join(fileId.toString(), `${fragmentOrder}_${fragmentId}.bin`);
@@ -337,7 +353,7 @@ app.get('/status', async (req, res) => {
             status: 'active',
             storageUsed: storageUsed,
             capacity: totalCapacity,
-            address: `http://${NODE_HOSTNAME}:${NODE_PORT}`,
+            address: `http://${EFFECTIVE_HOSTNAME}:${NODE_PORT}`,
             lastUpdated: new Date().toISOString()
         };
         
@@ -384,9 +400,23 @@ async function startServer(){
     console.log('=================================');
     console.log('🚀 Storage Node Starting');
     console.log('=================================');
+    
+    // ============================================================================
+    // CRITICAL: Determine the hostname/IP to use for registration
+    // Priority: 1. VM External IP, 2. ENV var, 3. Container IP, 4. Generated ID
+    // ============================================================================
+    const VM_EXTERNAL_IP = await getVMExternalIP();
+    const CONTAINER_IP = getContainerIP();
+    const ENV_HOSTNAME = process.env.NODE_HOSTNAME;
+    
+    // Set the effective hostname (used globally for registration)
+    EFFECTIVE_HOSTNAME = VM_EXTERNAL_IP || ENV_HOSTNAME || CONTAINER_IP || `storage-node-${uuidv4().slice(0, 8)}`;
+    
     console.log(`Node ID: ${NODE_ID}`);
+    console.log(`VM External IP: ${VM_EXTERNAL_IP || 'Not available (not running on GCP VM)'}`);
+    console.log(`ENV Hostname: ${ENV_HOSTNAME || 'Not set'}`);
     console.log(`Container IP: ${CONTAINER_IP || 'Not found'}`);
-    console.log(`Hostname: ${NODE_HOSTNAME}`);
+    console.log(`✅ Effective Hostname (for registration): ${EFFECTIVE_HOSTNAME}`);
     console.log(`Port: ${NODE_PORT}`);
     console.log(`Master Node: ${MASTER_NODE_URL}`);
     console.log('=================================');
@@ -404,7 +434,7 @@ async function startServer(){
     setInterval(heartbeat, HEARTBEAT_INTERVAL);
     setInterval(updateCapacity, HEARTBEAT_INTERVAL * 6);
     app.listen(NODE_PORT, '0.0.0.0', () => {
-        console.log(`✅ Storage Node server running on ${NODE_HOSTNAME}:${NODE_PORT}`);
+        console.log(`✅ Storage Node server running on ${EFFECTIVE_HOSTNAME}:${NODE_PORT}`);
         console.log(`Connected to Master Node: ${MASTER_NODE_URL}`);
     });
 }

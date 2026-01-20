@@ -55,7 +55,7 @@ class ActiveRepairService:
                 JOIN FILE_OBJECTS fo ON fv.FILE_ID = fo.FILE_ID
                 JOIN FILE_SEGMENTS fs ON fv.VERSION_ID = fs.VERSION_ID
                 JOIN FILE_FRAGMENTS ff ON fs.SEGMENT_ID = ff.SEGMENT_ID
-                ORDER BY fv.CREATED_AT DESC
+                ORDER BY fv.UPLOADED_AT DESC
             """
             result = self.master_db.select(sql)
             return result if isinstance(result, list) else []

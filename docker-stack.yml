@@ -10,7 +10,7 @@ services:
       NODE_PORT: 3000
       HEARTBEAT_INTERVAL: 30000
       STORAGE_PATH: /data/master_node
-      # Google Cloud SQL PostgreSQL Connection (Node.js format)
+      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
       POSTGRES_HOST: 34.143.181.179
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
@@ -42,7 +42,7 @@ services:
     image: aiess/fastapi-backend:latest
     environment:
       # Google Cloud SQL PostgreSQL Connection
-      DATABASE_URL: "postgresql://postgres:P2s|0muoOkIfVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
+      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
       MASTER_NODE_URL: http://master_node:3000
       FASTAPI_INTERNAL_URL: http://fastapi:8000
       JWT_SECRET_KEY: your-secret-key-here-change-in-production-very-long-and-secure
@@ -71,11 +71,21 @@ services:
   storage_node:
     image: aiess/storage-node:latest
     environment:
-      MASTER_NODE_HOST: master_node
-      MASTER_NODE_PORT: 3000
+      # Use manager's external IP instead of hostname for external workers
+      MASTER_NODE_HOST: 34.126.113.75
+      MASTER_NODE_PORT: 8000  # Use published port, not internal 3000
       NODE_ROLE: STORAGE
       HEARTBEAT_INTERVAL: 30000
       STORAGE_PATH: /data/storage
+      # Use task slot number to generate unique IDs
+      NODE_ID: "storage_node_{{.Task.Slot}}"
+      # NODE_HOSTNAME will use container IP (from getContainerIP() function)
+      # Templates don't work in network aliases, so we use overlay IPs instead
+    ports:
+      - target: 3000
+        published: 3000
+        protocol: tcp
+        mode: host
     volumes:
       - storage_data:/data
     networks:
@@ -85,7 +95,7 @@ services:
       placement:
         constraints:
           - node.role == worker
-        max_replicas_per_node: 2
+        max_replicas_per_node: 1
       restart_policy:
         condition: on-failure
         delay: 10s
@@ -96,6 +106,7 @@ services:
     image: aiess/fastapi-backend:latest
     command: python app/repair_worker.py
     environment:
+      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
       MASTER_NODE_URL: http://master_node:3000
       REPAIR_INTERVAL: 60
       MAX_CONCURRENT_REPAIRS: 3
@@ -122,6 +133,7 @@ services:
     image: aiess/fastapi-backend:latest
     command: python app/heartbeat_monitor.py
     environment:
+      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
       MASTER_NODE_URL: http://master_node:3000
       HEARTBEAT_CHECK_INTERVAL: 30
       HEARTBEAT_TIMEOUT: 45
@@ -148,6 +160,7 @@ services:
     image: aiess/fastapi-backend:latest
     command: python app/active_repair_service.py
     environment:
+      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
       ACTIVE_REPAIR_INTERVAL: 300  # Scan every 5 minutes
       MAX_REPAIR_JOBS_PER_SCAN: 50
       ACTIVE_REPAIR_SERVICE_ID: active-repair-service-1
@@ -173,6 +186,8 @@ networks:
   storage_network:
     driver: overlay
     attachable: true
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"
 
 volumes:
   master_node_data:
