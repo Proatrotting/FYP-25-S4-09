@@ -1,5 +1,6 @@
 import logging
 import uuid
+import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -114,14 +115,16 @@ def forgot_password(
         # Account exists: create reset token
         token = create_password_reset_token(master_db, str(account["account_id"]))
 
-        # Build reset URL (point to your frontend route)
-        base_url = str(request.base_url).rstrip("/")
+        frontend_url = os.getenv("FRONTEND_URL")
+        if not frontend_url:
+            frontend_url = str(request.base_url).rstrip("/")
         # Example frontend path, adjust as needed
-        reset_link = f"{base_url}/reset-password?token={token}"
+        reset_link = f"{frontend_url}/reset-password?token={token}"
 
         # Send email with reset link
         email_body = (
             f"Hi {account['username']},\n\n"
+            f"This is your reset token: {token}\n\n"
             f"You requested a password reset. Click the link below to set a new password:\n\n"
             f"{reset_link}\n\n"
             f"This link will expire in {RESET_TOKEN_EXPIRY_MINUTES} minutes.\n\n"
