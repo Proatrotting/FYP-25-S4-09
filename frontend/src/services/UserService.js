@@ -191,15 +191,12 @@ export async function uploadFile({ file, folderId = null, erasureId = "MEDIUM" }
     };
 
     xhr.onload = () => {
-      if (xhr.status === 200) {
+      if (xhr.status === 200 || xhr.status === 201) {
         resolve(JSON.parse(xhr.responseText));
       } else {
         reject(new Error('Upload failed'));
       }
     };
-
-    xhr.onerror = () => reject(new Error('Network error'));
-    xhr.send(formData);
   });
 }
 
