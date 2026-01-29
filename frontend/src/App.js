@@ -4,6 +4,7 @@ import HomePage from "./pages/HomePage";
 import ContactUs from "./pages/ContactUs";
 import LoginForm from "./components/LoginForm";
 import RegisterForm from "./components/RegisterForm";
+import Testimonials from "./pages/Testimonials";  
 import Layout from "./components/Layout";
 import UserLayout from "./components/Users/UserLayout";
 import UserDashboard from "./pages/Users/UserDashboard";
@@ -46,6 +47,7 @@ function App() {
             }
           />
           <Route path="/contact-us" element={<ContactUs />} />
+          <Route path="/testimonials" element={<Testimonials />} />
         </Route>
 
         <Route>

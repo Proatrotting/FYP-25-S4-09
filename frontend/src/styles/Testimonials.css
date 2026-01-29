@@ -1,0 +1,337 @@
+.testimonials-page {
+  min-height: 100vh;
+  background: linear-gradient(140deg, #eaf6fb 0%, #7edaff 100%);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hero / carousel card */
+.testimonials-hero h2 {
+  color: #2376ae;
+  margin-bottom: 0.4rem;
+}
+
+.testimonials-tagline {
+  color: #02416f;
+  font-size: 1.03rem;
+  margin-bottom: 1.2rem;
+}
+
+.tagline-highlight {
+  color: #2487cb;
+  font-weight: 600;
+}
+
+/* Carousel layout */
+.testimonials-carousel {
+  display: flex;
+  align-items: stretch;
+  gap: 1rem;
+  margin-top: 0.7rem;
+}
+
+.carousel-arrow {
+  border: none;
+  background: transparent;
+  color: #2376ae;
+  font-size: 2.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0 0.2rem;
+  transition: transform 0.15s, color 0.15s;
+}
+
+.carousel-arrow:hover,
+.carousel-arrow:focus {
+  transform: translateY(-1px);
+  color: #02416f;
+}
+
+.testimonial-card {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 16px;
+  border: 1px solid #ddeefd;
+  box-shadow: 0 2px 10px rgba(35, 118, 174, 0.05);
+  padding: 1.2rem 1.4rem 1.1rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.testimonial-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top right, #7edaff33, transparent 55%);
+  pointer-events: none;
+}
+
+/* Header with avatar */
+.testimonial-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.avatar-bubble {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: linear-gradient(130deg, #2487cb, #30c6fc);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.1rem;
+  box-shadow: 0 3px 9px rgba(35, 118, 174, 0.22);
+}
+
+.testimonial-header-text h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #02416f;
+}
+
+.testimonial-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.testimonial-mood {
+  font-size: 0.85rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: #e3f3ff;
+  color: #2376ae;
+}
+
+.testimonial-role {
+  margin: 0.1rem 0 0 0;
+  font-size: 0.9rem;
+  color: #19507e;
+}
+
+/* Rating stars */
+.testimonial-rating {
+  margin-top: 0.2rem;
+}
+
+.star {
+  font-size: 1rem;
+  color: #b3cee6;
+}
+
+.star-full {
+  color: #ffb400;
+}
+
+/* Text body */
+.testimonial-title {
+  margin: 0.3rem 0 0.1rem 0;
+  font-size: 1.02rem;
+  color: #2376ae;
+}
+
+.testimonial-text {
+  margin: 0.1rem 0;
+  color: #02416f;
+  font-size: 0.98rem;
+}
+
+.testimonial-highlight {
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  background: #f1f7ff;
+  border-left: 3px solid #2487cb;
+  border-radius: 10px;
+  color: #19507e;
+  font-size: 0.93rem;
+}
+
+.highlight-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #2376ae;
+  display: block;
+  margin-bottom: 0.1rem;
+}
+
+.testimonial-usage {
+  margin-top: 0.2rem;
+  font-size: 0.9rem;
+  color: #02416f;
+}
+
+.usage-label {
+  font-weight: 600;
+  color: #2376ae;
+}
+
+/* Carousel dots */
+.carousel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.carousel-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid #2487cb;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.16s, transform 0.14s, box-shadow 0.14s;
+}
+
+.carousel-dot.active {
+  background: linear-gradient(120deg, #2487cb, #30c6fc);
+  transform: scale(1.2);
+  box-shadow: 0 0 0 3px rgba(48, 198, 252, 0.2);
+}
+
+/* Why Shard section */
+.why-shard-card h2 {
+  color: #2376ae;
+  margin-bottom: 0.5rem;
+}
+
+.why-intro {
+  color: #02416f;
+  font-size: 0.99rem;
+  margin-bottom: 0.8rem;
+}
+
+.reasons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 1.1rem;
+}
+
+.reason-chip {
+  border-radius: 14px;
+  border: 1px solid #ddeefd;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 0.65rem 0.8rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.16s, border-color 0.16s,
+    background 0.16s;
+  color: #02416f;
+  font-size: 0.93rem;
+}
+
+.reason-chip:hover,
+.reason-chip:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(35, 118, 174, 0.12);
+  border-color: #30c6fc;
+  background: #f4fbff;
+}
+
+.reason-chip-active {
+  box-shadow: 0 5px 18px rgba(35, 118, 174, 0.18);
+  border-color: #2487cb;
+  background: linear-gradient(110deg, #ffffff, #eaf6fb);
+}
+
+.reason-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: linear-gradient(130deg, #2487cb, #30c6fc);
+  color: #fff;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.reason-text {
+  flex: 1;
+}
+
+/* CTA row */
+.cta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-top: 0.3rem;
+}
+
+.cta-text {
+  color: #02416f;
+  font-size: 0.97rem;
+}
+
+.testimonials-cta-btn {
+  font-size: 0.95rem;
+  padding-inline: 1.8rem;
+}
+
+/* Responsive tweaks */
+@media (max-width: 800px) {
+  .testimonials-carousel {
+    align-items: center;
+  }
+
+  .carousel-arrow {
+    font-size: 1.8rem;
+  }
+
+  .testimonial-card {
+    padding: 1rem 1rem 0.95rem 1rem;
+  }
+
+  .testimonial-header-text h3 {
+    font-size: 0.98rem;
+  }
+
+  .testimonial-text {
+    font-size: 0.93rem;
+  }
+
+  .reasons-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cta-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .testimonials-cta-btn {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (max-width: 500px) {
+  .testimonials-carousel {
+    gap: 0.3rem;
+  }
+
+  .carousel-arrow {
+    font-size: 1.6rem;
+  }
+
+  .testimonial-card {
+    margin: 0 0.1rem;
+  }
+}
