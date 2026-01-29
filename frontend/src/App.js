@@ -47,7 +47,7 @@ function App() {
             }
           />
           <Route path="/contact-us" element={<ContactUs />} />
-          <Route path="/testimonials" element={<Testimonials />} />
+          <Route path="/testimonials" element={<Testimonials toggleRegister={toggleRegister}/>} />
         </Route>
 
         <Route>
