@@ -196,9 +196,7 @@ export default function Testimonials() {
             </p>
             <button
               className="register-btn testimonials-cta-btn"
-              onClick={() => {
-                window.location.href = "/RegisterForm";
-              }}
+              onClick={toggleRegister}
             >
               Start sharing with Shard
             </button>
