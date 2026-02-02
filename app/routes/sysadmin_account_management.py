@@ -151,7 +151,6 @@ def deactivate_account(
     }
 
 
-
 @router.delete("", status_code=200)
 def delete_account(
     selector: AccountSelector,
@@ -169,45 +168,6 @@ def delete_account(
     )
 
     return {"message": "Account deleted", "account_id": account_id}
-
-@router.post("/_seed_first_sysadmin", status_code=200)
-def seed_first_sysadmin(
-    username: str,
-    master_db: MasterNodeDB = Depends(get_master_db),
-):
-    """
-    One-time: if no SYSADMIN exists, promote `username` to SYSADMIN.
-    After at least one SYSADMIN exists, this endpoint is disabled.
-    """
-    # Check if any sysadmin already exists
-    rows = master_db.select(
-        "SELECT 1 FROM account WHERE account_type = 'SYSADMIN' LIMIT 1",
-        [],
-    )
-    if rows:
-        # Once a sysadmin exists, this endpoint is disabled
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Sysadmin already seeded. Use authenticated sysadmin to promote others.",
-        )
-
-    # Ensure target user exists
-    user_rows = master_db.select(
-        "SELECT account_id FROM account WHERE username = $1",
-        [username],
-    )
-    if not user_rows:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Target user not found.",
-        )
-
-    master_db.execute(
-        "UPDATE account SET account_type = $1 WHERE username = $2",
-        ["SYSADMIN", username],
-    )
-
-    return {"message": "Initial sysadmin seeded", "username": username}
 
 
 @router.post("/promote-to-sysadmin", status_code=200)
