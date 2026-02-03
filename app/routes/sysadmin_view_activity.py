@@ -150,6 +150,7 @@ def get_user_activity_as_sysadmin(
             activity_list.append(
                 SysadminActivityDetail(
                     activity_id=str(activity["activity_id"]),
+                    account_id=resolved_account_id,
                     action_type=activity["action_type"],
                     resource_type=activity.get("resource_type"),
                     resource_id=str(activity["resource_id"])
