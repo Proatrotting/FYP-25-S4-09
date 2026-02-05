@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import '../styles/Testimonials.css';
 
 const testimonialsData = [
@@ -56,7 +57,8 @@ const reasonsToUseShard = [
   "Great for teams that handle credentials, financial reports, or any \"please don’t leak this\" document.",
 ];
 
-export default function Testimonials({ toggleRegister }) {
+export default function Testimonials() {
+  const navigate = useNavigate();
   const [activeIndex, setActiveIndex] = useState(0);
   const [hoveredReason, setHoveredReason] = useState(null);
 
@@ -196,7 +198,7 @@ export default function Testimonials({ toggleRegister }) {
             </p>
             <button
               className="register-btn testimonials-cta-btn"
-              onClick={toggleRegister}
+              onClick={() => navigate("/")} 
             >
               Start sharing with Shard
             </button>
