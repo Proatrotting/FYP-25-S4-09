@@ -124,7 +124,7 @@ def get_user_activity_as_sysadmin(
 
         # 4) Paged activities (same columns and ORDER as activity_history.py)
         activities_sql = f"""
-            SELECT activity_id, action_type, resource_type, resource_id,
+            SELECT activity_id, account_id, action_type, resource_type, resource_id,
                    ip_address, user_agent, details, created_at
             FROM activity_log
             WHERE {where_clause}
@@ -150,6 +150,7 @@ def get_user_activity_as_sysadmin(
             activity_list.append(
                 SysadminActivityDetail(
                     activity_id=str(activity["activity_id"]),
+                    account_id=str(activity["account_id"]),
                     action_type=activity["action_type"],
                     resource_type=activity.get("resource_type"),
                     resource_id=str(activity["resource_id"])
