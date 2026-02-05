@@ -56,7 +56,7 @@ const reasonsToUseShard = [
   "Great for teams that handle credentials, financial reports, or any \"please don’t leak this\" document.",
 ];
 
-export default function Testimonials() {
+export default function Testimonials({ toggleRegister }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [hoveredReason, setHoveredReason] = useState(null);
 
