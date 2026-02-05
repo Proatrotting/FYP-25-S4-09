@@ -27,7 +27,7 @@ function App() {
   const toggleRegister = () => setShowRegister((prev) => !prev);
 
   // Optional: callback when registration succeeds
-  const handleRegisterSuccess = (userData) => {
+  const handleRegisterSuccess = () => {
     setShowRegister(false);
     setShowLogin(true);
   };
