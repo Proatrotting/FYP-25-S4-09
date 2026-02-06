@@ -159,16 +159,201 @@ def delete_account(
     _: dict = Depends(require_sysadmin),
 ):
     """
-    Hard delete an account by account_id or username.
+    Hard delete an account and ALL related data by account_id or username.
+    This will permanently delete:
+    - User files and all fragments
+    - User folders  
+    - User activity history
+    - Share records
+    - Recycle bin entries
+    - Encryption key shares
     """
     account_id = resolve_account_id(selector, master_db)
-
-    master_db.execute(
-        "DELETE FROM account WHERE account_id = $1",
-        [account_id],
-    )
-
-    return {"message": "Account deleted", "account_id": account_id}
+    
+    try:
+        # Get user info for logging
+        user_info = master_db.select(
+            "SELECT username, email FROM account WHERE account_id = $1",
+            [account_id]
+        )
+        if not user_info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Account not found"
+            )
+        
+        username = user_info[0]["username"]
+        
+        # Step 1: Delete file fragments from storage nodes and cleanup metadata
+        # Get all file IDs for this user
+        user_files = master_db.select(
+            "SELECT file_id FROM file_objects WHERE account_id = $1",
+            [account_id]
+        )
+        
+        deleted_files = 0
+        deleted_fragments = 0
+        
+        for file_record in user_files:
+            file_id = file_record["file_id"]
+            
+            # Get all fragments for this file's versions
+            fragments = master_db.select("""
+                SELECT DISTINCT ff.fragment_id, fl.node_id, n.api_endpoint
+                FROM file_fragments ff
+                JOIN file_segments fs ON ff.segment_id = fs.segment_id  
+                JOIN file_versions fv ON fs.version_id = fv.version_id
+                LEFT JOIN fragment_location fl ON ff.fragment_id = fl.fragment_id
+                LEFT JOIN node n ON fl.node_id = n.node_id
+                WHERE fv.file_id = $1
+            """, [file_id])
+            
+            # Delete fragments from storage nodes
+            for fragment in fragments:
+                fragment_id = fragment.get("fragment_id")
+                node_endpoint = fragment.get("api_endpoint")
+                
+                if fragment_id and node_endpoint:
+                    try:
+                        import httpx
+                        import asyncio
+                        
+                        async def delete_fragment():
+                            async with httpx.AsyncClient() as client:
+                                await client.delete(f"{node_endpoint}/fragments/{fragment_id}")
+                        
+                        asyncio.run(delete_fragment())
+                        deleted_fragments += 1
+                    except Exception as e:
+                        # Log but continue - fragment may already be gone
+                        print(f"Warning: Could not delete fragment {fragment_id}: {e}")
+            
+            deleted_files += 1
+        
+        # Step 2: Delete database records in correct order (respecting foreign keys)
+        
+        # Delete key shares (SSS encryption keys)
+        master_db.execute("""
+            DELETE FROM key_share 
+            WHERE key_id IN (
+                SELECT fk.key_id FROM file_keys fk
+                JOIN file_versions fv ON fk.version_id = fv.version_id  
+                JOIN file_objects fo ON fv.file_id = fo.file_id
+                WHERE fo.account_id = $1
+            )
+        """, [account_id])
+        
+        # Delete file keys
+        master_db.execute("""
+            DELETE FROM file_keys 
+            WHERE version_id IN (
+                SELECT fv.version_id FROM file_versions fv
+                JOIN file_objects fo ON fv.file_id = fo.file_id
+                WHERE fo.account_id = $1
+            )
+        """, [account_id])
+        
+        # Delete fragment locations  
+        master_db.execute("""
+            DELETE FROM fragment_location
+            WHERE fragment_id IN (
+                SELECT ff.fragment_id FROM file_fragments ff
+                JOIN file_segments fs ON ff.segment_id = fs.segment_id
+                JOIN file_versions fv ON fs.version_id = fv.version_id
+                JOIN file_objects fo ON fv.file_id = fo.file_id  
+                WHERE fo.account_id = $1
+            )
+        """, [account_id])
+        
+        # Delete file fragments
+        master_db.execute("""
+            DELETE FROM file_fragments
+            WHERE segment_id IN (
+                SELECT fs.segment_id FROM file_segments fs
+                JOIN file_versions fv ON fs.version_id = fv.version_id
+                JOIN file_objects fo ON fv.file_id = fo.file_id
+                WHERE fo.account_id = $1
+            )
+        """, [account_id])
+        
+        # Delete file segments
+        master_db.execute("""
+            DELETE FROM file_segments 
+            WHERE version_id IN (
+                SELECT fv.version_id FROM file_versions fv
+                JOIN file_objects fo ON fv.file_id = fo.file_id
+                WHERE fo.account_id = $1
+            )
+        """, [account_id])
+        
+        # Delete file versions
+        master_db.execute("""
+            DELETE FROM file_versions
+            WHERE file_id IN (
+                SELECT file_id FROM file_objects WHERE account_id = $1
+            )
+        """, [account_id])
+        
+        # Step 3: Delete shares (both given and received)
+        master_db.execute("""
+            DELETE FROM share_access_log 
+            WHERE accessed_by = $1 OR share_id IN (
+                SELECT share_id FROM file_shares WHERE shared_by = $1 OR shared_with = $1
+            )
+        """, [account_id])
+        
+        master_db.execute("""
+            DELETE FROM file_shares 
+            WHERE shared_by = $1 OR shared_with = $1
+        """, [account_id])
+        
+        master_db.execute("""
+            DELETE FROM folder_shares 
+            WHERE shared_by = $1 OR shared_with = $1  
+        """, [account_id])
+        
+        # Step 4: Delete recycle bin entries
+        master_db.execute("""
+            DELETE FROM recycle_bin 
+            WHERE account_id = $1 OR deleted_by = $1 OR recovered_by = $1
+        """, [account_id])
+        
+        # Step 5: Delete files and folders (CASCADE will handle remaining references)
+        master_db.execute("DELETE FROM file_objects WHERE account_id = $1", [account_id])
+        master_db.execute("DELETE FROM folder WHERE account_id = $1", [account_id])
+        
+        # Step 6: Delete activity history
+        master_db.execute("DELETE FROM activity_log WHERE account_id = $1", [account_id])
+        
+        # Step 7: Finally delete the account
+        result = master_db.execute(
+            "DELETE FROM account WHERE account_id = $1",
+            [account_id]
+        )
+        
+        if result == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Account not found or already deleted"
+            )
+        
+        return {
+            "message": f"Account '{username}' completely deleted",
+            "account_id": account_id,
+            "cleanup_summary": {
+                "files_deleted": deleted_files,
+                "fragments_deleted": deleted_fragments,
+                "database_cleanup": "completed"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error during complete account deletion: {str(e)}"
+        )
 
 @router.post("/_seed_first_sysadmin", status_code=200)
 def seed_first_sysadmin(
