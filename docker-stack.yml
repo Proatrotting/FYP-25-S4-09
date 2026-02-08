@@ -47,7 +47,9 @@ services:
       FASTAPI_INTERNAL_URL: http://fastapi:8000
       JWT_SECRET_KEY: your-secret-key-here-change-in-production-very-long-and-secure
       JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      ACCESS_TOKEN_EXPIRE_MINUTES: 180
+      SMTP_EMAIL: shard6442@gmail.com
+      SMTP_PASSWORD: ialghugtojmoppby
       ENVIRONMENT: production
       PYTHONUNBUFFERED: "1"
     ports:
