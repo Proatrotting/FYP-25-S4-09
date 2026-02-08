@@ -101,14 +101,12 @@ export async function activateAccount({ account_id, username }) {
 }
 
 export async function deleteAccount({ account_id, username }) {
-  const params = new URLSearchParams();
-  if (account_id) params.append("account_id", account_id);
-  if (username) params.append("username", username);
-
-  const url = `${API_BASE_URL}/sysadmin/accounts?${params.toString()}`;
+  const url = `${API_BASE_URL}/sysadmin/accounts`;
+  const body = JSON.stringify({ account_id, username });
 
   const response = await authFetch(url, {
     method: "DELETE",
+    body,
   });
 
   if (!response.ok) {
