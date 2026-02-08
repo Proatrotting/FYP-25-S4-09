@@ -45,7 +45,7 @@ services:
       DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
       MASTER_NODE_URL: http://master_node:3000
       FASTAPI_INTERNAL_URL: http://fastapi:8000
-      FRONTEND_URL: https://fyp25s409-shard-git-cloud-variant-proatrottings-projects.vercel.app
+      FRONTEND_URL: https://fyp25s409-shard-git-cloud-variant-shard-fyp.vercel.app
       JWT_SECRET_KEY: your-secret-key-here-change-in-production-very-long-and-secure
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 180
