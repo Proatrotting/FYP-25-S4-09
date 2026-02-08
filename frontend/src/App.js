@@ -5,6 +5,7 @@ import ContactUs from "./pages/ContactUs";
 import LoginForm from "./components/LoginForm";
 import RegisterForm from "./components/RegisterForm";
 import Testimonials from "./pages/Testimonials";  
+import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
 import UserLayout from "./components/Users/UserLayout";
 import UserDashboard from "./pages/Users/UserDashboard";
@@ -53,6 +54,9 @@ function App() {
         <Route>
           <Route path="/shares/files/access/:token" element={<PublicSharePage />} />
         </Route>
+
+        {/* Password Reset Page */}
+        <Route path="/reset-password" element={<ResetPassword />} />
 
         {/* REGISTERED USERS PAGES use UserLayout (with UsersNavBar only) */}
         {/* Dashboard under /user-dashboard */}
