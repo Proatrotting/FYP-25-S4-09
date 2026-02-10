@@ -245,29 +245,39 @@ const UserDashboard = () => {
   const handleFileChange = async (e) => {
     const selectedFiles = Array.from(e.target.files);
     if (selectedFiles.length === 0) return;
+
     setIsLoading(true);
     try {
       for (const file of selectedFiles) {
-        const queueId = addToQueue(file, currentFolderId, erasureLevel);  // NEW
+        console.log("Uploading (picker):", file.name);
+        const queueId = addToQueue(file, currentFolderId, erasureLevel);
         try {
-          await uploadFile({ file, folderId: currentFolderId, erasureId: erasureLevel }, (progress) => {
-            updateQueueItem(queueId, { progress, status: 'uploading', timeLeft: estimateTime(progress, file.size) });
-          });
-          updateQueueItem(queueId, { status: 'success' });
+          await uploadFile(
+            { file, folderId: currentFolderId, erasureId: erasureLevel },
+            (progress) => {
+              updateQueueItem(queueId, {
+                progress,
+                status: "uploading",
+                timeLeft: estimateTime(progress, file.size),
+              });
+            }
+          );
+          updateQueueItem(queueId, { status: "success" });
           setTimeout(() => removeFromQueue(queueId), 3000);
         } catch (err) {
-          updateQueueItem(queueId, { status: 'error' });
+          console.error("Single upload error:", err);
+          updateQueueItem(queueId, { status: "error" });
+          throw err; // bubble so outer catch alerts
         }
       }
-      // Refresh list after all
-      const data = await listFiles(/* currentFolderId if supported */);
+      const data = await listFiles(currentFolderId); // use folder-aware list
       setFiles(data);
     } catch (err) {
       console.error(err);
-      alert('Failed to upload one or more files');
+      alert(err.message || "Failed to upload one or more files");
     } finally {
       setIsLoading(false);
-      e.target.value = '';  // Reset input
+      e.target.value = "";
     }
   };
 
@@ -405,6 +415,7 @@ const UserDashboard = () => {
     setIsLoading(true);
     try {
       for (const file of droppedFiles) {
+        console.log("Uploading (drop):", file.name);
         const queueId = addToQueue(file, currentFolderId, erasureLevel);
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -413,20 +424,20 @@ const UserDashboard = () => {
             (progress) => {
               updateQueueItem(queueId, {
                 progress,
-                status: 'uploading',
-                timeLeft: estimateTime(progress, file.size)
+                status: "uploading",
+                timeLeft: estimateTime(progress, file.size),
               });
             }
           );
-          updateQueueItem(queueId, { status: 'success' });
+          updateQueueItem(queueId, { status: "success" });
           setTimeout(() => removeFromQueue(queueId), 3000);
         } catch (uploadErr) {
-          updateQueueItem(queueId, { status: 'error' });
-          // Re-throw to trigger outer catch
+          console.error("Drop upload error:", uploadErr);
+          updateQueueItem(queueId, { status: "error" });
           throw uploadErr;
         }
       }
-      const data = await listFiles(); // or listFiles(currentFolderId)
+      const data = await listFiles(currentFolderId);
       setFiles(data);
     } catch (err) {
       console.error(err);

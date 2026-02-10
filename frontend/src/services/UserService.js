@@ -168,35 +168,54 @@ export async function uploadFolderApi({ folderName, files, parentFolderId = null
 }
 
 // ---------- File upload ----------
-export async function uploadFile({ file, folderId = null, erasureId = "MEDIUM" }, onProgress) {
+export async function uploadFile(
+  { file, folderId = null, erasureId = "MEDIUM" },
+  onProgress
+) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_BASE_URL}/files/upload`);
+    xhr.open("POST", `${API_BASE_URL}/files/upload`);
 
     const formData = new FormData();
-    formData.append('file', file);
-    formData.append('filename', file.name);
-    formData.append('folder_id', folderId || '');
-    formData.append('erasure_id', erasureId);
+    formData.append("file", file);
+    formData.append("filename", file.name);
+    formData.append("folder_id", folderId || "");
+    formData.append("erasure_id", erasureId);
 
-    // Auth header from token
     const token = getAccessToken();
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
 
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
+      if (e.lengthComputable && typeof onProgress === "function") {
         const progress = (e.loaded / e.total) * 100;
-        onProgress?.(progress);
+        onProgress(progress);
       }
     };
 
     xhr.onload = () => {
-      if (xhr.status === 200 || xhr.status === 201) {
-        resolve(JSON.parse(xhr.responseText));
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const json = JSON.parse(xhr.responseText || "{}");
+          resolve(json);
+        } catch (err) {
+          reject(new Error("Failed to parse upload response"));
+        }
       } else {
-        reject(new Error('Upload failed'));
+        let message = "Upload failed";
+        try {
+          const json = JSON.parse(xhr.responseText || "{}");
+          message = json.detail || json.message || message;
+        } catch {}
+        reject(new Error(message));
       }
     };
+
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.onabort = () => reject(new Error("Upload aborted"));
+
+    xhr.send(formData);
   });
 }
 
