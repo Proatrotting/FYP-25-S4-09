@@ -10,16 +10,19 @@ const UploadQueue = () => {
   const barRef = useRef(null);
 
   const handleMouseDown = useCallback((e) => {
+    console.log('Drag handle clicked');
     setIsDraggingHandle(true);
     e.preventDefault();
+    e.stopPropagation();
   }, []);
 
   const handleMouseMove = useCallback(
     (e) => {
       if (!isDraggingHandle || !barRef.current) return;
       const rect = barRef.current.getBoundingClientRect();
-      const newHeight = window.innerHeight - rect.top;
-      setHeight(Math.max(80, Math.min(400, newHeight)));
+      const clientY = e.clientY || e.touches?.[0]?.clientY;
+      const newHeight = Math.max(80, Math.min(400, window.innerHeight - clientY + 20));
+      setHeight(newHeight);
     },
     [isDraggingHandle]
   );
@@ -28,35 +31,37 @@ const UploadQueue = () => {
     setIsDraggingHandle(false);
   }, []);
 
+  // Global drag handlers
   useEffect(() => {
     if (isDraggingHandle) {
       document.addEventListener("mousemove", handleMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
+      document.addEventListener("touchmove", handleMouseMove, { passive: false });
+      document.addEventListener("touchend", handleMouseUp);
+      
       return () => {
         document.removeEventListener("mousemove", handleMouseMove);
         document.removeEventListener("mouseup", handleMouseUp);
+        document.removeEventListener("touchmove", handleMouseMove);
+        document.removeEventListener("touchend", handleMouseUp);
       };
     }
   }, [handleMouseMove, handleMouseUp, isDraggingHandle]);
 
-  const handleTouchStart = (e) => {
-    setIsDraggingHandle(true);
-    e.preventDefault();
+  const toggleQueue = () => {
+    setIsHidden(prev => !prev);
   };
 
-  const handleTouchMove = (e) => {
-    if (!barRef.current) return;
-    const rect = barRef.current.getBoundingClientRect();
-    const newHeight = window.innerHeight - rect.top;
-    setHeight(Math.max(80, Math.min(400, newHeight)));
-  };
-
-  const handleTouchEnd = () => {
-    setIsDraggingHandle(false);
-  };
-
-  if (isHidden) {
-    return null;
+  if (isHidden && uploadQueue.length === 0) {
+    // Show small reopen button when hidden and queue empty
+    return (
+      <div 
+        className="upload-queue-toggle" 
+        onClick={toggleQueue}
+      >
+        ↑
+      </div>
+    );
   }
 
   return (
@@ -70,15 +75,13 @@ const UploadQueue = () => {
           Upload Queue{uploadQueue.length > 0 ? ` (${uploadQueue.length})` : ""}
         </div>
         <div className="queue-actions">
-          <button type="button" onClick={() => setIsHidden(true)}>
-            Hide
+          <button type="button" onClick={toggleQueue}>
+            {isHidden ? 'Show' : 'Hide'}
           </button>
           <div
             className="drag-handle"
             onMouseDown={handleMouseDown}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
+            onTouchStart={handleMouseDown}
           >
             ⋮⋮
           </div>
@@ -94,21 +97,18 @@ const UploadQueue = () => {
 
       <div className="upload-queue-list">
         {uploadQueue.length === 0 ? (
-          <div
-            className="empty-queue"
-            style={{ padding: "16px", textAlign: "center", color: "#9ca3af" }}
-          >
-            No uploads in progress.
+          <div className="empty-queue">
+            No uploads in progress. Drag files here or click + Upload.
           </div>
         ) : (
-          uploadQueue.map(({ id, name, progress, status, timeLeft }) => (
+          uploadQueue.map(({ id, name, progress = 0, status = 'pending', timeLeft = '00:00' }) => (
             <div key={id} className="queue-row">
               <span>{name}</span>
               <span>{timeLeft}</span>
               <div className="progress-bar">
                 <div
                   className="progress-fill"
-                  style={{ width: `${progress || 0}%` }}
+                  style={{ width: `${progress}%` }}
                 />
               </div>
               <span className={`status ${status}`}>{status}</span>
