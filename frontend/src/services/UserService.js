@@ -115,9 +115,11 @@ export async function downloadFolderZip(folderId) {
   window.URL.revokeObjectURL(urlObject);
 }
 
-// ---------- Folder upload ----------
-export async function uploadFolderApi({ folderName, files, parentFolderId = null, erasureId = "MEDIUM" }) {
-  // files: FileList or array of File objects from an <input webkitdirectory>
+// ---------- Folder upload with progress ----------
+export async function uploadFolderApi(
+  { folderName, files, parentFolderId = null, erasureId = "MEDIUM" }, 
+  onProgress // ← Add progress callback like uploadFile
+) {
   if (!files || files.length === 0) {
     throw new Error("No files selected");
   }
@@ -130,7 +132,6 @@ export async function uploadFolderApi({ folderName, files, parentFolderId = null
         String.fromCharCode(...new Uint8Array(arrayBuffer))
       );
 
-      // Use webkitRelativePath to get relative_path (fall back to file.name)
       const relativePath =
         file.webkitRelativePath && file.webkitRelativePath.length > 0
           ? file.webkitRelativePath
@@ -139,32 +140,60 @@ export async function uploadFolderApi({ folderName, files, parentFolderId = null
       return {
         filename: file.name,
         data: base64Data,
-        relative_path: relativePath, // matches backend model
+        relative_path: relativePath,
         content_type: file.type || "application/octet-stream",
       };
     })
   );
 
   const body = {
-    folder_name: folderName,
+    folderName,
     files: fileEntries,
-    parent_folder_id: parentFolderId,
-    erasure_id: erasureId,
+    parentFolderId,
+    erasureId,
   };
 
-  const response = await authFetch(`${API_BASE_URL}/files/upload-folder`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}/files/upload-folder`);
+
+    const token = getAccessToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    xhr.setRequestHeader("Content-Type", "application/json");
+
+    // Progress tracking for entire folder upload
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && typeof onProgress === "function") {
+        const progress = (e.loaded / e.total) * 100;
+        onProgress(progress);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const json = JSON.parse(xhr.responseText || "{}");
+          resolve(json);
+        } catch (err) {
+          reject(new Error("Failed to parse upload response"));
+        }
+      } else {
+        let message = "Upload failed";
+        try {
+          const json = JSON.parse(xhr.responseText || "{}");
+          message = json.detail || json.message || message;
+        } catch {}
+        reject(new Error(message));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.onabort = () => reject(new Error("Upload aborted"));
+
+    xhr.send(JSON.stringify(body));
   });
-
-  const result = await response.json();
-  if (!response.ok) {
-    throw new Error(
-      result.detail || result.message || "Failed to upload folder"
-    );
-  }
-
-  return result; // FolderUploadResponse
 }
 
 // ---------- File upload ----------

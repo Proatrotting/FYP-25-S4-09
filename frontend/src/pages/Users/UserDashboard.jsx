@@ -124,26 +124,38 @@ const UserDashboard = () => {
 
     setIsUploadingFolder(true);
     try {
-      // Add ALL individual files to queue first (shows "uploading folder")
+      // Add ALL individual files to queue first
       for (const file of files) {
         const queueId = addToQueue(file, currentFolderId, erasureLevel);
-        folderQueueIds.push(queueId);  // Track our IDs
-        updateQueueItem(queueId, { 
-          status: 'uploading', 
-          timeLeft: 'Folder upload in progress...' 
-        });
+        folderQueueIds.push(queueId);
       }
 
-      // Upload entire folder via backend API
-      const result = await uploadFolderApi({
-        folderName,
-        files, // FileList passed to backend
-        parentFolderId: currentFolderId,
-        erasureId: erasureLevel,
-      });
+      // Calculate total folder size for time estimation
+      const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+
+      // progress callback
+      const result = await uploadFolderApi(
+        {
+          folderName,
+          files,
+          parentFolderId: currentFolderId, // or null for root
+          erasureId: erasureLevel,
+        },
+        (progress) => {
+          // Update ALL queue items with real backend progress
+          folderQueueIds.forEach((queueId) => {
+            updateQueueItem(queueId, {
+              progress, // Real progress from XHR (0-100%)
+              status: "uploading",
+              timeLeft: estimateTime(progress, totalSize), // Real time based on total size
+            });
+          });
+        }
+      );
 
       console.log("Folder upload result:", result);
       
+      // Success - all items go to success status
       folderQueueIds.forEach(id => {
         updateQueueItem(id, { status: 'success' });
       });
@@ -152,6 +164,7 @@ const UserDashboard = () => {
     } catch (err) {
       console.error("Failed to upload folder", err);
       
+      // Error - all items go to error status
       folderQueueIds.forEach(id => {
         updateQueueItem(id, { status: 'error' });
       });
