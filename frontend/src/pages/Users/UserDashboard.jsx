@@ -107,8 +107,8 @@ const UserDashboard = () => {
   };
 
   const handleFolderChange = async (e) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     // Derive folder name from first file's webkitRelativePath
     const first = files[0];
@@ -120,19 +120,43 @@ const UserDashboard = () => {
       }
     }
 
+    setIsUploadingFolder(true);
     try {
-      setIsUploadingFolder(true);
+      // Add ALL individual files to queue first (shows "uploading folder")
+      for (const file of files) {
+        const queueId = addToQueue(file, currentFolderId, erasureLevel);
+        updateQueueItem(queueId, { 
+          status: 'uploading', 
+          timeLeft: 'Folder upload in progress...' 
+        });
+      }
+
+      // Upload entire folder via backend API
       const result = await uploadFolderApi({
         folderName,
-        files,
-        parentFolderId: currentFolderId, // or null if you always upload at root
+        files, // FileList passed to backend
+        parentFolderId: currentFolderId,
         erasureId: erasureLevel,
       });
+
       console.log("Folder upload result:", result);
-      // refresh folders + files
+      
+      // Mark all files as success
+      useUploadQueue.forEach(({ id }) => {
+        updateQueueItem(id, { status: 'success' });
+        // Optional: keep or auto-remove after 3s
+      });
+
+      // Refresh UI
       await loadCurrentFolderData();
     } catch (err) {
       console.error("Failed to upload folder", err);
+      
+      // Mark all files as error
+      useUploadQueue.forEach(({ id }) => {
+        updateQueueItem(id, { status: 'error' });
+      });
+      
       alert(err.message || "Failed to upload folder");
     } finally {
       setIsUploadingFolder(false);
@@ -263,7 +287,6 @@ const UserDashboard = () => {
             }
           );
           updateQueueItem(queueId, { status: "success" });
-          setTimeout(() => removeFromQueue(queueId), 3000);
         } catch (err) {
           console.error("Single upload error:", err);
           updateQueueItem(queueId, { status: "error" });
@@ -430,7 +453,6 @@ const UserDashboard = () => {
             }
           );
           updateQueueItem(queueId, { status: "success" });
-          setTimeout(() => removeFromQueue(queueId), 3000);
         } catch (uploadErr) {
           console.error("Drop upload error:", uploadErr);
           updateQueueItem(queueId, { status: "error" });

@@ -97,7 +97,7 @@ const UploadQueue = () => {
       <div className="upload-queue-list">
         {uploadQueue.length === 0 ? (
           <div className="empty-queue">
-            No uploads in progress. Drag files here or click + Upload.
+            No uploads in progress.
           </div>
         ) : (
           uploadQueue.map(({ id, name, progress = 0, status = 'pending', timeLeft = '00:00' }) => (
