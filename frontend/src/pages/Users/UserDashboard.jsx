@@ -39,7 +39,7 @@ const UserDashboard = () => {
 
   const [openMenuFileId, setOpenMenuFileId] = useState(null);
   const [openMenuType, setOpenMenuType] = useState(null); // "file" | "folder"
-  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [_menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
 
   const folderInputRef = useRef(null);
   const [isUploadingFolder, setIsUploadingFolder] = useState(false);
