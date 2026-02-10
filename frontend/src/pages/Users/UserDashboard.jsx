@@ -63,6 +63,25 @@ const UserDashboard = () => {
     setOpenMenuType(null);
   };
 
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      const menu = document.querySelector('.actions-menu-dropdown');
+      const trigger = document.querySelector('.table-action-trigger');
+      
+      if (openMenuFileId && 
+          !menu?.contains(e.target) && 
+          !trigger?.contains(e.target)) {
+        closeMenu();
+      }
+    };
+    
+    if (openMenuFileId) {
+      document.addEventListener('click', handleClickOutside);
+    }
+    
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [openMenuFileId]);
+
   // Load root folders and files on mount
   useEffect(() => {
     const loadInitial = async () => {
@@ -1112,12 +1131,6 @@ const UserDashboard = () => {
       {openMenuFileId && (
         <div
           className="actions-menu-dropdown floating-menu"
-          style={{
-            position: "fixed",
-            top: menuPosition.y,
-            left: menuPosition.x,
-            zIndex: 9999,
-          }}
           onClick={(e) => e.stopPropagation()}
         >
           {openMenuType === "folder" && (
