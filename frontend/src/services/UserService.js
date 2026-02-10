@@ -70,41 +70,36 @@ export async function authFetch(url, options = {}) {
 
 // ---------- Folder download ----------
 export async function downloadFolderZip(folderId) {
-  const url = `${API_BASE_URL}/files/download-folder/${folderId}`;
+  const token = getAccessToken();
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
 
-  const response = await authFetch(url, {
+  const response = await fetch(`${API_BASE_URL}/files/download-folder/${folderId}`, {
     method: "GET",
-    // IMPORTANT: do NOT set "Content-Type": "application/json" here;
-    // authFetch already sets JSON; we override below.
     headers: {
-      // Remove/override JSON header for binary data
+      Authorization: `Bearer ${token}`,
     },
   });
 
   if (!response.ok) {
-    let errorText = "Failed to download folder";
-    try {
-      const errData = await response.json();
-      errorText = errData.detail || errData.message || errorText;
-    } catch {
-      // ignore JSON parse error for non-JSON responses
-    }
-    throw new Error(errorText);
+    const text = await response.text();
+    throw new Error(text || "Failed to download folder");
   }
 
-  // Get filename from Content-Disposition if present
+  // Response is ZIP file with Content-Disposition header
+  const blob = await response.blob();
+
+  // Try to extract filename from Content-Disposition; fall back to provided name
   const disposition = response.headers.get("Content-Disposition");
   let filename = "folder.zip";
   if (disposition) {
-    const match = disposition.match(
-      /filename\*?=['"]?(?:UTF-\d''|)([^;'"]+)['"]?/i
-    );
+    const match = disposition.match(/filename="?([^"]+)"?/i);
     if (match && match[1]) {
-      filename = decodeURIComponent(match[1]);
+      filename = match[1];
     }
   }
 
-  const blob = await response.blob(); // ZIP binary [web:35][web:42][web:45]
   const urlObject = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = urlObject;
@@ -302,6 +297,90 @@ export async function downloadFile(fileId, fileName) {
   window.URL.revokeObjectURL(url);
 }
 
+// ---------- Download shared file ----------
+export async function downloadSharedFile(shareId, fileName) {
+  const token = getAccessToken();
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/shares/files/shared-user-download/${shareId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Failed to download shared file");
+  }
+
+  // Response is raw bytes with Content-Disposition header
+  const blob = await response.blob();
+
+  // Try to extract filename from Content-Disposition; fall back to provided name
+  const disposition = response.headers.get("Content-Disposition");
+  let downloadName = fileName || "download";
+  if (disposition) {
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    if (match && match[1]) {
+      downloadName = match[1];
+    }
+  }
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = downloadName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+// ---------- Download shared folder ----------
+export async function downloadSharedFolder(shareId, folderName) {
+  const token = getAccessToken();
+  if (!token) {
+    throw new Error("Not authenticated");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/shares/folders/shared-user-download/${shareId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Failed to download shared folder");
+  }
+
+  // Response is ZIP file with Content-Disposition header
+  const blob = await response.blob();
+
+  // Try to extract filename from Content-Disposition; fall back to provided name
+  const disposition = response.headers.get("Content-Disposition");
+  let downloadName = `${folderName || "folder"}.zip`;
+  if (disposition) {
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    if (match && match[1]) {
+      downloadName = match[1];
+    }
+  }
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = downloadName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 // ---------- File info ----------
 export async function getFileInfo(fileId) {
   const response = await authFetch(`${API_BASE_URL}/files/info/${fileId}`, {
@@ -436,11 +515,11 @@ export async function createFileShare({
   requirepassword = false,
 }) {
   const body = {
-    fileid,
-    sharedwithusername,
-    permissions,
-    expireshours,
-    requirepassword,
+    file_id: fileid,
+    shared_with_username: sharedwithusername,
+    permissions: permissions,
+    expires_hours: expireshours,
+    require_password: requirepassword,
   };
 
   const response = await authFetch(`${API_BASE_URL}/shares/files/create`, {
@@ -452,8 +531,15 @@ export async function createFileShare({
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to create file share");
   }
-  // result: { shareid, sharetoken, onetimepassword, shareurl, expiresat, permissions }
-  return result;
+  // Map snake_case to camelCase for frontend
+  return {
+    shareid: result.share_id,
+    sharetoken: result.share_token,
+    onetimepassword: result.one_time_password,
+    shareurl: result.share_url,
+    expiresat: result.expires_at,
+    permissions: result.permissions,
+  };
 }
 
 // ---------- Folder sharing ----------
@@ -465,11 +551,11 @@ export async function createFolderShare({
   requirepassword = false,
 }) {
   const body = {
-    folderid,
-    sharedwithusername,
-    permissions,
-    expireshours,
-    requirepassword,
+    folder_id: folderid,
+    shared_with_username: sharedwithusername,
+    permissions: permissions,
+    expires_hours: expireshours,
+    require_password: requirepassword,
   };
 
   const response = await authFetch(`${API_BASE_URL}/shares/folders/create`, {
@@ -481,12 +567,20 @@ export async function createFolderShare({
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to create folder share");
   }
-  return result;
+  // Map snake_case to camelCase for frontend
+  return {
+    shareid: result.share_id,
+    sharetoken: result.share_token,
+    onetimepassword: result.one_time_password,
+    shareurl: result.share_url,
+    expiresat: result.expires_at,
+    permissions: result.permissions,
+  };
 }
 
 // ---------- Sharing: list "shared with me" ----------
 export async function getFilesSharedWithMe() {
-  const response = await authFetch(`${API_BASE_URL}/shares/files/with-me`, {
+  const response = await authFetch(`${API_BASE_URL}/shares/with-me`, {
     method: "GET",
   });
 
@@ -528,10 +622,10 @@ export async function searchShareUsers(query) {
 // ---------- Sharing: share file with specific user ----------
 export async function shareFileWithUser({ fileid, username, permissions, expireshours = null }) {
   const body = {
-    fileid,
+    file_id: fileid,
     username,
     permissions,
-    expireshours,
+    expires_hours: expireshours,
   };
 
   const response = await authFetch(
@@ -545,6 +639,31 @@ export async function shareFileWithUser({ fileid, username, permissions, expires
   const result = await response.json();
   if (!response.ok) {
     throw new Error(result.detail || result.message || "Failed to share file");
+  }
+  // { message, shareid, permissions, expiresat }
+  return result;
+}
+
+// ---------- Sharing: share folder with specific user ----------
+export async function shareFolderWithUser({ folderid, username, permissions, expireshours = null }) {
+  const body = {
+    file_id: folderid,  // Backend uses same field name for folder_id
+    username,
+    permissions,
+    expires_hours: expireshours,
+  };
+
+  const response = await authFetch(
+    `${API_BASE_URL}/shares/folders/share-with-user`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    }
+  );
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.detail || result.message || "Failed to share folder");
   }
   // { message, shareid, permissions, expiresat }
   return result;

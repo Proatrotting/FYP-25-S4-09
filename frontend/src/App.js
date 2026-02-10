@@ -13,7 +13,7 @@ import ActivityHistory from "./pages/Users/ActivityHistory";
 import UserManagement from "./pages/Users/UserManagement";
 import AccountManagement from "./pages/Users/AccountManagementService";
 import Shared from "./pages/Users/Shared";
-import PublicSharePage from "./pages/Users/PublicSharePage";
+import AnonymousDownload from "./pages/Users/AnonymousDownload";
 import Bin from "./pages/Users/Bin";
 import AdminLayout from "./components/Admin/AdminLayout";
 import Dashboard from "./pages/Admin/Dashboard";
@@ -51,9 +51,10 @@ function App() {
           <Route path="/testimonials" element={<Testimonials toggleRegister={toggleRegister}/>} />
         </Route>
 
-        <Route>
-          <Route path="/shares/files/access/:token" element={<PublicSharePage />} />
-        </Route>
+        {/* Public share links - handles both files and folders */}
+        <Route path="/share/:token" element={<AnonymousDownload />} />
+        <Route path="/shares/files/access/:token" element={<AnonymousDownload />} />
+        <Route path="/shares/folders/access/:token" element={<AnonymousDownload />} />
 
         {/* Password Reset Page */}
         <Route path="/reset-password" element={<ResetPassword />} />

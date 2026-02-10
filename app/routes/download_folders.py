@@ -360,7 +360,7 @@ async def download_folder_as_zip(
             zip_buffer,
             media_type="application/zip",
             headers={
-                "Content-Disposition": f"attachment; filename={root_folder_name}.zip"
+                "Content-Disposition": f'attachment; filename="{root_folder_name}.zip"'
             }
         )
         

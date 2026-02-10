@@ -103,16 +103,18 @@ def parse_folder_structure(files: List[FileInFolder]) -> List[Dict]:
     """
     Extract folder structure from file paths.
     Returns a list of folder definitions sorted by depth (parents before children).
+    Skips the first path segment (root folder) as it's created separately.
     """
     folder_paths = set()
     
-    # Extract all unique folder paths
+    # Extract all unique folder paths (skip first segment = root folder)
     for file_data in files:
         # Split path and remove filename
         path_parts = file_data.relative_path.split('/')
-        if len(path_parts) > 1:  # Has folders
-            for i in range(len(path_parts) - 1):
-                folder_path = '/'.join(path_parts[:i + 1])
+        if len(path_parts) > 2:  # Has subfolders beyond root
+            # Skip first segment (root folder) and build paths from there
+            for i in range(1, len(path_parts) - 1):
+                folder_path = '/'.join(path_parts[1:i + 1])
                 folder_paths.add(folder_path)
     
     # Convert to list of folder definitions
@@ -139,14 +141,13 @@ def get_unique_folder_name(base_name: str, parentfolderid: Optional[str], accoun
     # Fetch all existing names under this parent for this account
     if parentfolderid is None:
         rows = master_db.select(
-            "SELECT NAME FROM FOLDER WHERE ACCOUNTID = %s AND PARENTFOLDERID IS NULL",
-            accountid,
+            "SELECT NAME FROM FOLDER WHERE ACCOUNT_ID = $1 AND PARENT_FOLDER_ID IS NULL",
+            [accountid]
         )
     else:
         rows = master_db.select(
-            "SELECT NAME FROM FOLDER WHERE ACCOUNTID = %s AND PARENTFOLDERID = %s",
-            accountid,
-            parentfolderid,
+            "SELECT NAME FROM FOLDER WHERE ACCOUNT_ID = $1 AND PARENT_FOLDER_ID = $2",
+            [accountid, parentfolderid]
         )
 
     existing_names = {r["name"] for r in rows}
@@ -182,9 +183,8 @@ def create_single_folder_direct(
         # Validate parent folder if provided
         if parent_folder_id is not None:
             parent = master_db.select(
-                "SELECT FOLDERID FROM FOLDER WHERE FOLDERID = %s AND ACCOUNTID = %s",
-                parent_folder_id,
-                account_id,
+                "SELECT FOLDER_ID FROM FOLDER WHERE FOLDER_ID = $1 AND ACCOUNT_ID = $2",
+                [parent_folder_id, account_id]
             )
             if not parent:
                 raise HTTPException(
@@ -198,12 +198,9 @@ def create_single_folder_direct(
         # Insert new folder
         folder_id = str(uuid.uuid4())
         master_db.execute(
-            "INSERT INTO FOLDER (FOLDERID, NAME, ACCOUNTID, PARENTFOLDERID, CREATEDAT) "
-            "VALUES (%s, %s, %s, %s, NOW())",
-            folder_id,
-            unique_name,
-            account_id,
-            parent_folder_id,
+            "INSERT INTO FOLDER (FOLDER_ID, NAME, ACCOUNT_ID, PARENT_FOLDER_ID, CREATED_AT) "
+            "VALUES ($1, $2, $3, $4, NOW())",
+            [folder_id, unique_name, account_id, parent_folder_id]
         )
 
         logger.info(f"Created folder {unique_name} with ID {folder_id}")
@@ -451,12 +448,12 @@ async def upload_folder(
             try:
                 # Determine folder ID for this file
                 path_parts = file_data.relative_path.split('/')
-                if len(path_parts) > 1:
-                    # File is in a subfolder
-                    folder_path = '/'.join(path_parts[:-1])
+                if len(path_parts) > 2:
+                    # File is in a subfolder (skip first segment = root folder)
+                    folder_path = '/'.join(path_parts[1:-1])
                     folder_id = folder_map.get(folder_path, root_folder_id)
                 else:
-                    # File is in root folder
+                    # File is directly in root folder
                     folder_id = root_folder_id
                 
                 logger.info(f"Uploading {file_data.relative_path} to folder {folder_id}")

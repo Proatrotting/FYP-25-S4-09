@@ -54,6 +54,11 @@ class ShareInfo(BaseModel):
     share_id: str
     resource_type: str  # FILE or FOLDER
     resource_name: str
+    shared_by_username: str
+    permissions: str
+    expires_at: Optional[datetime]
+    requires_password: bool
+    is_expired: bool
 
 class ShareWithUserRequest(BaseModel):
     file_id: str = Field(..., description="UUID of the file to share")
@@ -240,19 +245,15 @@ async def create_file_share(
     scheme = 'https' if http_request.headers.get('x-forwarded-proto') == 'https' else 'http'
     
     # Map backend hosts to frontend hosts
-    if 'localhost:8004' in api_host:
-        frontend_url = api_host.replace(':8004', ':8080')
-        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
-    elif '127.0.0.1:8004' in api_host:
-        frontend_url = api_host.replace(':8004', ':8080')
-        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
+    if 'localhost:8004' in api_host or 'localhost' in api_host or '127.0.0.1' in api_host:
+        # Local development - React runs on port 3000
+        share_url = f"http://localhost:3000/share/{share_token}"
     elif 'shardfyp.myddns.me' in api_host:
         # Production backend -> frontend mapping
-        share_url = f"https://fyp25s409-shard-git-cloud-variant-proatrottings-projects.vercel.app/share_access.html?token={share_token}"
+        share_url = f"https://fyp25s409-shard-git-cloud-variant-shard-fyp.vercel.app/share/{share_token}"
     else:
-        # Fallback for other domains - assume same host different port
-        frontend_host = api_host.replace(':8004', ':8080') if ':8004' in api_host else api_host
-        share_url = f"{scheme}://{frontend_host}/share_access.html?token={share_token}"
+        # Fallback for other domains
+        share_url = f"{scheme}://{api_host}/share/{share_token}"
     
     return ShareResponse(
         share_id=str(file_share.share_id),
@@ -334,19 +335,15 @@ async def create_folder_share(
     scheme = 'https' if http_request.headers.get('x-forwarded-proto') == 'https' else 'http'
     
     # Map backend hosts to frontend hosts
-    if 'localhost:8004' in api_host:
-        frontend_url = api_host.replace(':8004', ':8080')
-        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
-    elif '127.0.0.1:8004' in api_host:
-        frontend_url = api_host.replace(':8004', ':8080')
-        share_url = f"{scheme}://{frontend_url}/share_access.html?token={share_token}"
+    if 'localhost:8004' in api_host or 'localhost' in api_host or '127.0.0.1' in api_host:
+        # Local development - React runs on port 3000
+        share_url = f"http://localhost:3000/share/{share_token}"
     elif 'shardfyp.myddns.me' in api_host:
         # Production backend -> frontend mapping
-        share_url = f"https://fyp25s409-shard-git-cloud-variant-proatrottings-projects.vercel.app/share_access.html?token={share_token}"
+        share_url = f"https://fyp25s409-shard-git-cloud-variant-shard-fyp.vercel.app/share/{share_token}"
     else:
-        # Fallback for other domains - assume same host different port
-        frontend_host = api_host.replace(':8004', ':8080') if ':8004' in api_host else api_host
-        share_url = f"{scheme}://{frontend_host}/share_access.html?token={share_token}"
+        # Fallback for other domains
+        share_url = f"{scheme}://{api_host}/share/{share_token}"
     
     return ShareResponse(
         share_id=str(folder_share.share_id),
@@ -1041,6 +1038,7 @@ async def download_shared_subfolder(
     from fastapi.responses import StreamingResponse
     import zipfile
     import io
+    from app.routes.download_files import process_file_download
     
     # Find the share
     folder_share = db.query(FolderShare).filter(
@@ -1155,78 +1153,25 @@ async def download_shared_subfolder(
     zip_buffer = io.BytesIO()
     
     try:
-        import httpx
-        import base64
-        from app.core.erasure_coding import get_erasure_coder_for_profile
-        
-        master_node_url = "http://master_node:3000"
-        
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            async with httpx.AsyncClient() as client:
-                for file_data in all_files:
-                    file_obj = file_data["file_obj"]
-                    zip_path = file_data["zip_path"]
+            for file_data in all_files:
+                file_obj = file_data["file_obj"]
+                zip_path = file_data["zip_path"]
+                
+                try:
+                    # Use process_file_download which handles decryption properly
+                    reconstructed_data = await process_file_download(
+                        file_id=str(file_obj.file_id),
+                        account_id=folder_owner_id,
+                        skip_ownership_check=True
+                    )
                     
-                    try:
-                        # Get file info and reconstruct content
-                        file_info_response = await client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
-                        if file_info_response.status_code != 200:
-                            continue
-                        
-                        file_info_data = file_info_response.json()["file"]
-                        
-                        # Get fragments
-                        fragments_response = await client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
-                        if fragments_response.status_code != 200:
-                            continue
-                        
-                        fragments = fragments_response.json()
-                        if not fragments:
-                            continue
-                        
-                        # Initialize erasure decoder
-                        erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
-                        
-                        # Fetch and reconstruct file
-                        sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-                        available_fragments = []
-                        fragment_indexes = []
-                        
-                        for fragment in sorted_fragments:
-                            if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                                continue
-                            
-                            storage_url = fragment["api_endpoint"]
-                            fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
-                            
-                            try:
-                                frag_response = await client.get(fragment_url, timeout=30)
-                                if frag_response.status_code == 200:
-                                    fragment_data = frag_response.json()
-                                    if fragment_data.get("success") and fragment_data.get("data"):
-                                        decoded_data = base64.b64decode(fragment_data["data"])
-                                        available_fragments.append(decoded_data)
-                                        fragment_indexes.append(fragment["num_fragment"])
-                            except Exception:
-                                continue
-                        
-                        if not erasure_coder.can_reconstruct(len(available_fragments)):
-                            continue
-                        
-                        # Reconstruct file
-                        reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-                        
-                        # Truncate to original size
-                        original_file_size = int(file_info_data["file_size"])
-                        if len(reconstructed_data) > original_file_size:
-                            reconstructed_data = reconstructed_data[:original_file_size]
-                        
-                        # Write actual file content to ZIP
-                        zip_file.writestr(zip_path, reconstructed_data)
-                        
-                    except Exception as e:
-                        # Add error file if download fails
-                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+                    # Write actual file content to ZIP
+                    zip_file.writestr(zip_path, reconstructed_data)
+                    
+                except Exception as e:
+                    # Add error file if download fails
+                    zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
         
         zip_buffer.seek(0)
         
@@ -1302,6 +1247,12 @@ async def download_folder_share(
         Folder.folder_id == folder_share.folder_id
     ).first()
     
+    # Get the folder owner's account_id for decryption
+    folder_owner_id = str(folder_obj.account_id)
+    
+    # Import the file processing function for proper decryption
+    from app.routes.download_files import process_file_download
+    
     # Get all files in the folder and subfolders (recursive)
     def get_all_files_recursive(folder_id, path_prefix=""):
         all_files = []
@@ -1352,97 +1303,37 @@ async def download_folder_share(
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     
-    async with httpx.AsyncClient() as http_client:
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Track ZIP paths to prevent duplicates at ZIP level
-            zip_paths_used = set()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Track ZIP paths to prevent duplicates at ZIP level
+        zip_paths_used = set()
+        
+        for file_info in all_files:
+            file_obj = file_info["file_obj"]
+            zip_path = file_info["zip_path"]
             
-            for file_info in all_files:
-                file_obj = file_info["file_obj"]
-                zip_path = file_info["zip_path"]
+            # Additional ZIP-level duplicate check
+            if zip_path in zip_paths_used:
+                logger.warning(f"Duplicate ZIP path detected in shared folder, skipping: {zip_path}")
+                continue
+            
+            zip_paths_used.add(zip_path)
+            
+            try:
+                # Use process_file_download which handles decryption properly
+                reconstructed_data = await process_file_download(
+                    file_id=str(file_obj.file_id),
+                    account_id=folder_owner_id,
+                    skip_ownership_check=True
+                )
                 
-                # Additional ZIP-level duplicate check
-                if zip_path in zip_paths_used:
-                    logger.warning(f"Duplicate ZIP path detected in shared folder, skipping: {zip_path}")
-                    continue
+                # Add reconstructed and decrypted file to ZIP
+                zip_file.writestr(zip_path, reconstructed_data)
+                logger.info(f"Successfully added {file_obj.file_name} to ZIP ({len(reconstructed_data)} bytes)")
                 
-                zip_paths_used.add(zip_path)
-                
-                try:
-                    # Reconstruct file using the same logic as individual file download
-                    from app.core.erasure_coding import get_erasure_coder_for_profile
-                    import base64
-                    import logging
-                    
-                    logger = logging.getLogger(__name__)
-                    master_node_url = "http://master_node:3000"
-                    
-                    # Get file info
-                    file_info_response = await http_client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
-                    if file_info_response.status_code != 200:
-                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to get file info: {file_info_response.text}")
-                        continue
-                    
-                    file_info_data = file_info_response.json()["file"]
-                    
-                    # Get fragment information
-                    fragments_response = await http_client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
-                    if fragments_response.status_code != 200:
-                        zip_file.writestr(f"{zip_path}.error.txt", f"Failed to get fragments: {fragments_response.text}")
-                        continue
-                    
-                    fragments = fragments_response.json()
-                    if not fragments:
-                        zip_file.writestr(f"{zip_path}.error.txt", "File fragments not found")
-                        continue
-                    
-                    # Initialize erasure decoder
-                    erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
-                    
-                    # Fetch and reconstruct file data
-                    sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-                    available_fragments = []
-                    fragment_indexes = []
-                    
-                    for fragment in sorted_fragments:
-                        if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                            continue
-                            
-                        fragment_url = f"{fragment['api_endpoint']}/fragments/{fragment['fragment_id']}"
-                        try:
-                            fragment_response = await http_client.get(fragment_url, timeout=30.0)
-                            if fragment_response.status_code == 200:
-                                fragment_data = fragment_response.json()
-                                if fragment_data.get("success") and fragment_data.get("data"):
-                                    decoded_fragment = base64.b64decode(fragment_data["data"])
-                                    available_fragments.append(decoded_fragment)
-                                    fragment_indexes.append(fragment["num_fragment"])
-                        except Exception as frag_e:
-                            logger.warning(f"Failed to fetch fragment {fragment['fragment_id']}: {frag_e}")
-                            continue
-                    
-                    # Check if we have enough fragments to reconstruct
-                    if not erasure_coder.can_reconstruct(len(available_fragments)):
-                        zip_file.writestr(f"{zip_path}.error.txt", 
-                                        f"Not enough fragments for reconstruction. Need {erasure_coder.k}, got {len(available_fragments)}")
-                        continue
-                    
-                    # Reconstruct the file
-                    reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-                    
-                    # Trim to original size
-                    original_size = int(file_info_data["file_size"])
-                    if len(reconstructed_data) > original_size:
-                        reconstructed_data = reconstructed_data[:original_size]
-                    
-                    # Add reconstructed file to ZIP
-                    zip_file.writestr(zip_path, reconstructed_data)
-                    logger.info(f"Successfully added {file_obj.file_name} to ZIP ({len(reconstructed_data)} bytes)")
-                    
-                except Exception as e:
-                    # Add error file if reconstruction fails
-                    logger.error(f"Failed to reconstruct file {file_obj.file_name}: {e}")
-                    zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+            except Exception as e:
+                # Add error file if reconstruction fails
+                logger.error(f"Failed to reconstruct file {file_obj.file_name}: {e}")
+                zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
     
     zip_buffer.seek(0)
     
@@ -1761,6 +1652,69 @@ def share_file_with_user(
         "share_id": str(file_share.share_id),
         "permissions": file_share.permissions,
         "expires_at": file_share.expires_at
+    }
+
+@router.post("/folders/share-with-user", response_model=dict)
+def share_folder_with_user(
+    request: ShareWithUserRequest,
+    db: Session = Depends(get_db),
+    current_user: Account = Depends(get_current_user)
+):
+    """Share a folder directly with a specific user (Google Drive style)"""
+    
+    # Note: request.file_id is actually folder_id here (reusing same model)
+    folder_id = request.file_id
+    
+    # Verify folder exists and user owns it
+    folder_obj = db.query(Folder).filter(
+        Folder.folder_id == uuid.UUID(folder_id),
+        Folder.account_id == current_user.account_id
+    ).first()
+    
+    if not folder_obj:
+        raise HTTPException(status_code=404, detail="Folder not found or not owned by user")
+    
+    # Find target user
+    target_user = db.query(Account).filter(Account.username == request.username).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if already shared with this user
+    existing_share = db.query(FolderShare).filter(
+        FolderShare.folder_id == folder_obj.folder_id,
+        FolderShare.shared_by == current_user.account_id,
+        FolderShare.shared_with == target_user.account_id,
+        FolderShare.is_active == "ACTIVE"
+    ).first()
+    
+    if existing_share:
+        raise HTTPException(status_code=400, detail="Folder already shared with this user")
+    
+    # Create expiration date if specified
+    expires_at = None
+    if request.expires_hours:
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=request.expires_hours)
+    
+    # Create folder share
+    folder_share = FolderShare(
+        folder_id=folder_obj.folder_id,
+        shared_by=current_user.account_id,
+        shared_with=target_user.account_id,
+        share_token=None,  # No public token for user shares
+        permissions=request.permissions,
+        expires_at=expires_at,
+        is_active="ACTIVE"
+    )
+    
+    db.add(folder_share)
+    db.commit()
+    db.refresh(folder_share)
+    
+    return {
+        "message": f"Folder '{folder_obj.name}' shared with {target_user.username}",
+        "share_id": str(folder_share.share_id),
+        "permissions": folder_share.permissions,
+        "expires_at": folder_share.expires_at
     }
 
 @router.get("/with-me", response_model=List[SharedWithMeResponse])
@@ -2271,92 +2225,41 @@ async def download_user_shared_folder(
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     
-    import httpx
-    import base64
-    from app.core.erasure_coding import get_erasure_coder_for_profile
+    # Import the proper download function that handles decryption
+    from app.routes.download_files import process_file_download
     
-    master_node_url = "http://master_node:3000"
-    
-    async with httpx.AsyncClient() as client:
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Track ZIP paths to prevent duplicates at ZIP level
-            zip_paths_used = set()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Track ZIP paths to prevent duplicates at ZIP level
+        zip_paths_used = set()
+        
+        for file_info in all_files:
+            file_obj = file_info["file_obj"]
+            zip_path = file_info["zip_path"]
             
-            for file_info in all_files:
-                file_obj = file_info["file_obj"]
-                zip_path = file_info["zip_path"]
+            # Additional ZIP-level duplicate check
+            if zip_path in zip_paths_used:
+                logger.warning(f"Duplicate ZIP path detected in user shared folder, skipping: {zip_path}")
+                continue
+            
+            zip_paths_used.add(zip_path)
+            
+            try:
+                # Use the proper download function that handles decryption
+                # Skip ownership check since this is a shared file
+                file_data = await process_file_download(
+                    file_id=str(file_obj.file_id),
+                    account_id=str(folder_obj.account_id),  # Original owner's account
+                    skip_ownership_check=True
+                )
                 
-                # Additional ZIP-level duplicate check
-                if zip_path in zip_paths_used:
-                    logger.warning(f"Duplicate ZIP path detected in user shared folder, skipping: {zip_path}")
-                    continue
+                # Write actual file content to ZIP
+                zip_file.writestr(zip_path, file_data)
+                logger.info(f"✅ Added to ZIP: {zip_path}")
                 
-                zip_paths_used.add(zip_path)
-                
-                try:
-                    # Get file info
-                    file_info_response = await client.get(f"{master_node_url}/files/info/{file_obj.file_id}")
-                    if file_info_response.status_code != 200:
-                        zip_file.writestr(f"{zip_path}.error.txt", "Failed to retrieve file info")
-                        continue
-                    
-                    file_info_data = file_info_response.json()["file"]
-                    
-                    # Get fragments
-                    fragments_response = await client.get(f"{master_node_url}/fragments/{file_obj.file_id}")
-                    if fragments_response.status_code != 200:
-                        zip_file.writestr(f"{zip_path}.error.txt", "Failed to retrieve fragments")
-                        continue
-                    
-                    fragments = fragments_response.json()
-                    if not fragments:
-                        zip_file.writestr(f"{zip_path}.error.txt", "File fragments not found")
-                        continue
-                    
-                    # Initialize erasure decoder
-                    erasure_coder = get_erasure_coder_for_profile(file_info_data["erasure_id"])
-                    
-                    # Fetch and reconstruct file
-                    sorted_fragments = sorted(fragments, key=lambda x: x["num_fragment"])
-                    available_fragments = []
-                    fragment_indexes = []
-                    
-                    for fragment in sorted_fragments:
-                        if not fragment.get("fragment_id") or not fragment.get("api_endpoint"):
-                            continue
-                        
-                        storage_url = fragment["api_endpoint"]
-                        fragment_url = f"{storage_url}/fragments/{fragment['fragment_id']}"
-                        
-                        try:
-                            frag_response = await client.get(fragment_url, timeout=30)
-                            if frag_response.status_code == 200:
-                                fragment_data = frag_response.json()
-                                if fragment_data.get("success") and fragment_data.get("data"):
-                                    decoded_data = base64.b64decode(fragment_data["data"])
-                                    available_fragments.append(decoded_data)
-                                    fragment_indexes.append(fragment["num_fragment"])
-                        except Exception:
-                            continue
-                    
-                    if not erasure_coder.can_reconstruct(len(available_fragments)):
-                        zip_file.writestr(f"{zip_path}.error.txt", "Not enough fragments for reconstruction")
-                        continue
-                    
-                    # Reconstruct file
-                    reconstructed_data = erasure_coder.decode_data(available_fragments, fragment_indexes)
-                    
-                    # Truncate to original size
-                    original_file_size = int(file_info_data["file_size"])
-                    if len(reconstructed_data) > original_file_size:
-                        reconstructed_data = reconstructed_data[:original_file_size]
-                    
-                    # Write actual file content to ZIP
-                    zip_file.writestr(zip_path, reconstructed_data)
-                    
-                except Exception as e:
-                    # Add error file if download fails
-                    zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
+            except Exception as e:
+                # Add error file if download fails
+                logger.error(f"Failed to download file {zip_path}: {e}")
+                zip_file.writestr(f"{zip_path}.error.txt", f"Failed to retrieve file: {str(e)}")
     
     zip_buffer.seek(0)
     

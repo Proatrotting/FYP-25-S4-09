@@ -5,7 +5,7 @@ import { createFolder, listFolders, moveFolder,
          uploadFile, listFiles, downloadFile, 
          getFileInfo, searchFilesAndFolders, moveFile,
          createFileShare,createFolderShare,
-         searchShareUsers, shareFileWithUser,
+         searchShareUsers, shareFileWithUser, shareFolderWithUser,
          binDeleteFile, binDeleteFolder, uploadFolderApi,
          downloadFolderZip} from "../../services/UserService";
 import { useUploadQueue } from "../../components/Users/UploadContext";
@@ -395,14 +395,16 @@ const UserDashboard = () => {
   }
 
   async function handleMoveFile(file) {
-    const targetFolderId = moveTargets[file.file_id] || null;
-    if (!targetFolderId) {
-      alert("Please select a folder first");
+    const targetFolderId = moveTargets[file.file_id];
+    if (targetFolderId === undefined) {
+      alert("Please select a destination first");
       return;
     }
 
     try {
-      await moveFile({ fileId: file.file_id, newFolderId: targetFolderId });
+      // Convert empty string to null for root folder
+      const destinationId = targetFolderId === "" ? null : targetFolderId;
+      await moveFile({ fileId: file.file_id, newFolderId: destinationId });
       // refresh current view: folders and files
       await loadCurrentFolderData();
       alert("File moved successfully");
@@ -413,19 +415,21 @@ const UserDashboard = () => {
   }
 
   async function handleMoveFolder(folder) {
-    const targetFolderId = moveTargets[folder.folder_id] || null;
+    const targetFolderId = moveTargets[folder.folder_id];
+    if (targetFolderId === undefined) {
+      alert("Please select a destination first");
+      return;
+    }
     if (targetFolderId === folder.folder_id) {
       alert("Cannot move a folder into itself");
       return;
     }
-    if (!targetFolderId) {
-      alert("Please select a folder first");
-      return;
-    }
     try {
+      // Convert empty string to null for root folder
+      const destinationId = targetFolderId === "" ? null : targetFolderId;
       await moveFolder({
         folderId: folder.folder_id,
-        newParentFolderId: targetFolderId,
+        newParentFolderId: destinationId,
       });
       await loadCurrentFolderData(); // reload folders + files for currentFolderId
       alert("Folder moved successfully");
@@ -549,18 +553,30 @@ const UserDashboard = () => {
 
     setShareLoading(true);
     try {
-      const res = await shareFileWithUser({
-        fileid: shareData.fileId,
-        username: shareUsername.trim(),
-        permissions: sharePermissions,
-        expireshours: getExpiresHoursFromOption(publicExpires),
-      });
-      alert(res.message || "File shared successfully");
+      let res;
+      if (shareData.isFolder) {
+        // Share folder
+        res = await shareFolderWithUser({
+          folderid: shareData.fileId,
+          username: shareUsername.trim(),
+          permissions: sharePermissions,
+          expireshours: getExpiresHoursFromOption(publicExpires),
+        });
+      } else {
+        // Share file
+        res = await shareFileWithUser({
+          fileid: shareData.fileId,
+          username: shareUsername.trim(),
+          permissions: sharePermissions,
+          expireshours: getExpiresHoursFromOption(publicExpires),
+        });
+      }
+      alert(res.message || `${shareData.isFolder ? 'Folder' : 'File'} shared successfully`);
       setShareModalOpen(false);
       setShareData(null);
     } catch (err) {
       console.error(err);
-      alert(err.message || "Failed to share file");
+      alert(err.message || `Failed to share ${shareData.isFolder ? 'folder' : 'file'}`);
     } finally {
       setShareLoading(false);
     }
@@ -1093,6 +1109,7 @@ const UserDashboard = () => {
                       )}
                     </div>
                 )}
+              </div>
             </div>
 
             <div className="modal-footer">
@@ -1117,6 +1134,7 @@ const UserDashboard = () => {
             </div>
           </div>
         </div>
+      )}
 
       {openMenuFileId && (
         <div
@@ -1160,12 +1178,13 @@ const UserDashboard = () => {
               <div className="actions-menu-item">
                 <select
                   className="search-input"
-                  value={moveTargets[openMenuFileId] || ""}
+                  value={moveTargets[openMenuFileId] !== undefined ? moveTargets[openMenuFileId] : ""}
                   onChange={(e) =>
                     handleMoveTargetChange(openMenuFileId, e.target.value)
                   }
                 >
-                  <option value="">Select folder</option>
+                  <option value="">Select destination</option>
+                  <option value="" style={{ fontWeight: "bold" }}>📁 Root (Home)</option>
                   {folders.map((f) => (
                     <option key={f.folder_id} value={f.folder_id}>
                       {f.name}
@@ -1234,12 +1253,13 @@ const UserDashboard = () => {
               <div className="actions-menu-item">
                 <select
                   className="search-input"
-                  value={moveTargets[openMenuFileId] || ""}
+                  value={moveTargets[openMenuFileId] !== undefined ? moveTargets[openMenuFileId] : ""}
                   onChange={(e) =>
                     handleMoveTargetChange(openMenuFileId, e.target.value)
                   }
                 >
-                  <option value="">Select folder</option>
+                  <option value="">Select destination</option>
+                  <option value="" style={{ fontWeight: "bold" }}>📁 Root (Home)</option>
                   {folders.map((f) => (
                     <option key={f.folder_id} value={f.folder_id}>
                       {f.name}
@@ -1294,8 +1314,6 @@ const UserDashboard = () => {
         </div>
       )}
     </div>
-    )}
-  </div>
   );
 };
 
