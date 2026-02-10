@@ -4,7 +4,7 @@ import '../../styles/Users/UploadQueue.css';
 
 const UploadQueue = () => {
   const { uploadQueue, removeFromQueue } = useUploadQueue();
-  const [height, setHeight] = useState(80); // min 80px
+  const [height, setHeight] = useState(80);
   const [isDraggingHandle, setIsDraggingHandle] = useState(false);
   const [isHidden, setIsHidden] = useState(false);
   const barRef = useRef(null);
@@ -39,7 +39,6 @@ const UploadQueue = () => {
     }
   }, [handleMouseMove, handleMouseUp, isDraggingHandle]);
 
-  // Touch for mobile
   const handleTouchStart = (e) => {
     setIsDraggingHandle(true);
     e.preventDefault();
@@ -47,7 +46,6 @@ const UploadQueue = () => {
 
   const handleTouchMove = (e) => {
     if (!barRef.current) return;
-    const touch = e.touches[0];
     const rect = barRef.current.getBoundingClientRect();
     const newHeight = window.innerHeight - rect.top;
     setHeight(Math.max(80, Math.min(400, newHeight)));
