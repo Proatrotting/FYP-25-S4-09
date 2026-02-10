@@ -254,7 +254,7 @@ const UserDashboard = () => {
     }
   };
 
-  const { addToQueue, updateQueueItem, removeFromQueue } = useUploadQueue();
+  const { addToQueue, updateQueueItem } = useUploadQueue();
 
   // Simple time estimator (improve with avg speed tracking later)
   const estimateTime = (progress, size) => {
