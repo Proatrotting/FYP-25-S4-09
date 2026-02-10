@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { API_BASE_URL } from "../../services/UserService";
 import "../../styles/Users/AnonymousDownload.css";
 
 const AnonymousDownload = () => {
   const { token } = useParams();
-  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [info, setInfo] = useState(null);
   const [password, setPassword] = useState("");
@@ -14,7 +13,6 @@ const AnonymousDownload = () => {
   const [accessLoading, setAccessLoading] = useState(false);
   
   // For folder browsing
-  const [currentFolderId, setCurrentFolderId] = useState(null);
   const [folderContents, setFolderContents] = useState({ folders: [], files: [] });
   const [breadcrumbs, setBreadcrumbs] = useState([]);
 
@@ -84,8 +82,7 @@ const AnonymousDownload = () => {
       if (info.resource_type === "FILE" && data.permissions === "DOWNLOAD") {
         handleDownloadFile();
       } else if (info.resource_type === "FOLDER") {
-        // Set root folder ID and load contents
-        setCurrentFolderId(data.folder_id);
+        // Load folder contents
         setBreadcrumbs([{ id: data.folder_id, name: data.folder_name }]);
         loadFolderContents(data.folder_id);
       }
@@ -127,7 +124,6 @@ const AnonymousDownload = () => {
   };
 
   const handleNavigateToFolder = (folder) => {
-    setCurrentFolderId(folder.folder_id);
     setBreadcrumbs([...breadcrumbs, { id: folder.folder_id, name: folder.name }]);
     loadFolderContents(folder.folder_id);
   };
@@ -135,7 +131,6 @@ const AnonymousDownload = () => {
   const handleNavigateToBreadcrumb = (index) => {
     const newBreadcrumbs = breadcrumbs.slice(0, index + 1);
     setBreadcrumbs(newBreadcrumbs);
-    setCurrentFolderId(newBreadcrumbs[newBreadcrumbs.length - 1].id);
     loadFolderContents(newBreadcrumbs[newBreadcrumbs.length - 1].id);
   };
 
