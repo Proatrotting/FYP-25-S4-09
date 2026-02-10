@@ -39,7 +39,7 @@ const UserDashboard = () => {
 
   const [openMenuFileId, setOpenMenuFileId] = useState(null);
   const [openMenuType, setOpenMenuType] = useState(null); // "file" | "folder"
-  const [_menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
 
   const folderInputRef = useRef(null);
   const [isUploadingFolder, setIsUploadingFolder] = useState(false);
@@ -1131,6 +1131,12 @@ const UserDashboard = () => {
       {openMenuFileId && (
         <div
           className="actions-menu-dropdown floating-menu"
+          style={{
+            position: "fixed",
+            top: menuPosition.y,
+            left: menuPosition.x,
+            zIndex: 9999,
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           {openMenuType === "folder" && (
