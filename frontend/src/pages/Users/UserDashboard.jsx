@@ -39,7 +39,7 @@ const UserDashboard = () => {
 
   const [openMenuFileId, setOpenMenuFileId] = useState(null);
   const [openMenuType, setOpenMenuType] = useState(null); // "file" | "folder"
-  const [_menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
 
   const folderInputRef = useRef(null);
   const [isUploadingFolder, setIsUploadingFolder] = useState(false);
@@ -129,8 +129,6 @@ const UserDashboard = () => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    const folderQueueIds = [];
-
     // Derive folder name from first file's webkitRelativePath
     const first = files[0];
     let folderName = "New Folder";
@@ -142,13 +140,11 @@ const UserDashboard = () => {
     }
 
     setIsUploadingFolder(true);
-    try {
-      // Add ALL individual files to queue first
-      for (const file of files) {
-        const queueId = addToQueue(file, currentFolderId, erasureLevel);
-        folderQueueIds.push(queueId);
-      }
+    
+    // Add folder as a SINGLE queue item
+    const queueId = addFolderToQueue(folderName, files, currentFolderId, erasureLevel);
 
+    try {
       // Calculate total folder size for time estimation
       const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 
@@ -161,32 +157,26 @@ const UserDashboard = () => {
           erasureId: erasureLevel,
         },
         (progress) => {
-          // Update ALL queue items with real backend progress
-          folderQueueIds.forEach((queueId) => {
-            updateQueueItem(queueId, {
-              progress, // Real progress from XHR (0-100%)
-              status: "uploading",
-              timeLeft: estimateTime(progress, totalSize), // Real time based on total size
-            });
+          // Update the single folder queue item
+          updateQueueItem(queueId, {
+            progress, // Real progress from XHR (0-100%)
+            status: "uploading",
+            timeLeft: estimateTime(progress, totalSize), // Real time based on total size
           });
         }
       );
 
       console.log("Folder upload result:", result);
       
-      // Success - all items go to success status
-      folderQueueIds.forEach(id => {
-        updateQueueItem(id, { status: 'success' });
-      });
+      // Success - mark folder as complete
+      updateQueueItem(queueId, { status: 'success' });
 
       await loadCurrentFolderData();
     } catch (err) {
       console.error("Failed to upload folder", err);
       
-      // Error - all items go to error status
-      folderQueueIds.forEach(id => {
-        updateQueueItem(id, { status: 'error' });
-      });
+      // Error - mark folder as failed
+      updateQueueItem(queueId, { status: 'error' });
       
       alert(err.message || "Failed to upload folder");
     } finally {
@@ -285,7 +275,7 @@ const UserDashboard = () => {
     }
   };
 
-  const { addToQueue, updateQueueItem } = useUploadQueue();
+  const { addToQueue, addFolderToQueue, updateQueueItem } = useUploadQueue();
 
   // Simple time estimator (improve with avg speed tracking later)
   const estimateTime = (progress, size) => {
@@ -1131,6 +1121,12 @@ const UserDashboard = () => {
       {openMenuFileId && (
         <div
           className="actions-menu-dropdown floating-menu"
+          style={{
+            position: "fixed",
+            top: menuPosition.y,
+            left: menuPosition.x,
+            zIndex: 9999,
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           {openMenuType === "folder" && (

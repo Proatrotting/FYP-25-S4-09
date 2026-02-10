@@ -118,40 +118,11 @@ export async function downloadFolderZip(folderId) {
 // ---------- Folder upload with progress ----------
 export async function uploadFolderApi(
   { folderName, files, parentFolderId = null, erasureId = "MEDIUM" }, 
-  onProgress // ← Add progress callback like uploadFile
+  onProgress
 ) {
   if (!files || files.length === 0) {
     throw new Error("No files selected");
   }
-
-  // Build files array in backend's expected shape
-  const fileEntries = await Promise.all(
-    Array.from(files).map(async (file) => {
-      const arrayBuffer = await file.arrayBuffer();
-      const base64Data = btoa(
-        String.fromCharCode(...new Uint8Array(arrayBuffer))
-      );
-
-      const relativePath =
-        file.webkitRelativePath && file.webkitRelativePath.length > 0
-          ? file.webkitRelativePath
-          : file.name;
-
-      return {
-        filename: file.name,
-        data: base64Data,
-        relative_path: relativePath,
-        content_type: file.type || "application/octet-stream",
-      };
-    })
-  );
-
-  const body = {
-    folderName,
-    files: fileEntries,
-    parentFolderId,
-    erasureId,
-  };
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -161,7 +132,33 @@ export async function uploadFolderApi(
     if (token) {
       xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     }
-    xhr.setRequestHeader("Content-Type", "application/json");
+    // Don't set Content-Type - browser will set it with boundary for multipart/form-data
+
+    // Build FormData with multipart files
+    const formData = new FormData();
+    formData.append("folder_name", folderName);
+    formData.append("parent_folder_id", parentFolderId || "");
+    formData.append("erasure_id", erasureId);
+
+    // Build metadata for each file
+    const fileMetadata = Array.from(files).map((file, index) => {
+      const relativePath =
+        file.webkitRelativePath && file.webkitRelativePath.length > 0
+          ? file.webkitRelativePath
+          : file.name;
+
+      // Append actual file to FormData
+      formData.append(`file_${index}`, file);
+
+      return {
+        filename: file.name,
+        relative_path: relativePath,
+        content_type: file.type || "application/octet-stream",
+      };
+    });
+
+    // Append metadata as JSON string
+    formData.append("file_metadata", JSON.stringify(fileMetadata));
 
     // Progress tracking for entire folder upload
     xhr.upload.onprogress = (e) => {
@@ -192,7 +189,7 @@ export async function uploadFolderApi(
     xhr.onerror = () => reject(new Error("Network error during upload"));
     xhr.onabort = () => reject(new Error("Upload aborted"));
 
-    xhr.send(JSON.stringify(body));
+    xhr.send(formData);
   });
 }
 
