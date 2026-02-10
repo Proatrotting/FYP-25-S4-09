@@ -110,6 +110,8 @@ const UserDashboard = () => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
+    const folderQueueIds = [];
+
     // Derive folder name from first file's webkitRelativePath
     const first = files[0];
     let folderName = "New Folder";
@@ -120,12 +122,9 @@ const UserDashboard = () => {
       }
     }
 
-    // ✅ Track queue IDs locally
-    const folderQueueIds = [];
-
     setIsUploadingFolder(true);
     try {
-      // Add ALL individual files to queue first
+      // Add ALL individual files to queue first (shows "uploading folder")
       for (const file of files) {
         const queueId = addToQueue(file, currentFolderId, erasureLevel);
         folderQueueIds.push(queueId);  // Track our IDs
@@ -138,14 +137,13 @@ const UserDashboard = () => {
       // Upload entire folder via backend API
       const result = await uploadFolderApi({
         folderName,
-        files,
+        files, // FileList passed to backend
         parentFolderId: currentFolderId,
         erasureId: erasureLevel,
       });
 
       console.log("Folder upload result:", result);
       
-      // ✅ Use folderQueueIds (our tracked array)
       folderQueueIds.forEach(id => {
         updateQueueItem(id, { status: 'success' });
       });
@@ -154,7 +152,6 @@ const UserDashboard = () => {
     } catch (err) {
       console.error("Failed to upload folder", err);
       
-      // ✅ Use folderQueueIds for errors too
       folderQueueIds.forEach(id => {
         updateQueueItem(id, { status: 'error' });
       });
