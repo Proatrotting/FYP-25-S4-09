@@ -100,9 +100,13 @@ const UploadQueue = () => {
             No uploads in progress.
           </div>
         ) : (
-          uploadQueue.map(({ id, name, progress = 0, status = 'pending', timeLeft = '00:00' }) => (
+          uploadQueue.map(({ id, name, progress = 0, status = 'pending', timeLeft = '00:00', type = 'file', fileCount = 0 }) => (
             <div key={id} className="queue-row">
-              <span>{name}</span>
+              <span>
+                {type === 'folder' ? '📁 ' : '📄 '}
+                {name}
+                {type === 'folder' && fileCount > 0 ? ` (${fileCount} files)` : ''}
+              </span>
               <span>{timeLeft}</span>
               <div className="progress-bar">
                 <div
