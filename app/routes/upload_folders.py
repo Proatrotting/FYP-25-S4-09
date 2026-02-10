@@ -130,68 +130,91 @@ def parse_folder_structure(files: List[FileInFolder]) -> List[Dict]:
     
     return folders
 
+def get_unique_folder_name(base_name: str, parentfolderid: Optional[str], accountid: str, masterdb: MasterNodeDB) -> str:
+    """
+    Given a desired folder name, find a unique name under the same parent by
+    appending/incrementing ' (n)' like Google Drive: 'Photos', 'Photos (2)', 'Photos (3)', ...
+    """
+    # Fetch all existing names under this parent for this account
+    if parentfolderid is None:
+        rows = masterdb.select(
+            "SELECT NAME FROM FOLDER WHERE ACCOUNTID = %s AND PARENTFOLDERID IS NULL",
+            accountid,
+        )
+    else:
+        rows = masterdb.select(
+            "SELECT NAME FROM FOLDER WHERE ACCOUNTID = %s AND PARENTFOLDERID = %s",
+            accountid,
+            parentfolderid,
+        )
+
+    existing_names = {r["name"] for r in rows}
+
+    # If base_name is unused, return it as-is
+    if base_name not in existing_names:
+        return base_name
+
+    # Otherwise, increment suffix: base_name (2), base_name (3), ...
+    n = 2
+    while True:
+        candidate = f"{base_name} ({n})"
+        if candidate not in existing_names:
+            return candidate
+        n += 1
+
 
 def create_single_folder_direct(
     folder_name: str,
     parent_folder_id: Optional[str],
     account_id: str,
-    master_db: MasterNodeDB
+    masterdb: MasterNodeDB,
 ) -> str:
     """
     Create a single folder using direct database calls.
-    Returns the created folder_id or existing folder_id if it already exists.
+    If a folder with the same name exists under the same parent, create a new
+    folder with an incremented suffix: 'Name', 'Name (2)', 'Name (3)', ...
+    Returns the created folder_id OR the existing folder_id if you ever want to
+    keep pure-idempotent behavior (but here we always create a new one when there
+    is a name clash).
     """
     try:
-        # Validate parent folder exists if provided
+        # Validate parent folder if provided
         if parent_folder_id is not None:
-            parent = master_db.select(
-                "SELECT FOLDER_ID FROM FOLDER WHERE FOLDER_ID = $1 AND ACCOUNT_ID = $2",
-                [parent_folder_id, account_id]
+            parent = masterdb.select(
+                "SELECT FOLDERID FROM FOLDER WHERE FOLDERID = %s AND ACCOUNTID = %s",
+                parent_folder_id,
+                account_id,
             )
             if not parent:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Parent folder {parent_folder_id} not found"
+                    detail=f"Parent folder {parent_folder_id} not found",
                 )
-        
-        # Check if folder already exists
-        if parent_folder_id is None:
-            existing = master_db.select(
-                "SELECT FOLDER_ID FROM FOLDER WHERE ACCOUNT_ID = $1 AND PARENT_FOLDER_ID IS NULL AND NAME = $2",
-                [account_id, folder_name]
-            )
-        else:
-            existing = master_db.select(
-                "SELECT FOLDER_ID FROM FOLDER WHERE ACCOUNT_ID = $1 AND PARENT_FOLDER_ID = $2 AND NAME = $3",
-                [account_id, parent_folder_id, folder_name]
-            )
-        
-        if existing:
-            # Return existing folder ID
-            folder_id = str(existing[0]['folder_id'])
-            logger.info(f"Folder '{folder_name}' already exists with ID: {folder_id}")
-            return folder_id
-        
-        # Create new folder
+
+        # Decide on the final name (unique under this parent)
+        unique_name = get_unique_folder_name(folder_name.strip(), parent_folder_id, account_id, masterdb)
+
+        # Insert new folder
         folder_id = str(uuid.uuid4())
-        master_db.execute(
-            """
-            INSERT INTO FOLDER (FOLDER_ID, NAME, ACCOUNT_ID, PARENT_FOLDER_ID, CREATED_AT)
-            VALUES ($1, $2, $3, $4, NOW())
-            """,
-            [folder_id, folder_name.strip(), account_id, parent_folder_id]
+        masterdb.execute(
+            "INSERT INTO FOLDER (FOLDERID, NAME, ACCOUNTID, PARENTFOLDERID, CREATEDAT) "
+            "VALUES (%s, %s, %s, %s, NOW())",
+            folder_id,
+            unique_name,
+            account_id,
+            parent_folder_id,
         )
-        
-        logger.info(f"Created folder '{folder_name}' with ID: {folder_id}")
+
+        logger.info(f"Created folder {unique_name} with ID {folder_id}")
         return folder_id
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating folder '{folder_name}': {e}")
+        logger.error(f"Error creating folder {folder_name}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create folder: {str(e)}"
+            detail=f"Failed to create folder: {str(e)}",
         )
 
 
