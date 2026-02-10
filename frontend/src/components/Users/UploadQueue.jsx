@@ -18,8 +18,7 @@ const UploadQueue = () => {
 
   const handleMouseMove = useCallback(
     (e) => {
-      if (!isDraggingHandle || !barRef.current) return;
-      const rect = barRef.current.getBoundingClientRect();
+      if (!isDraggingHandle) return;
       const clientY = e.clientY || e.touches?.[0]?.clientY;
       const newHeight = Math.max(80, Math.min(400, window.innerHeight - clientY + 20));
       setHeight(newHeight);
