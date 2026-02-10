@@ -120,11 +120,15 @@ const UserDashboard = () => {
       }
     }
 
+    // ✅ Track queue IDs locally
+    const folderQueueIds = [];
+
     setIsUploadingFolder(true);
     try {
-      // Add ALL individual files to queue first (shows "uploading folder")
+      // Add ALL individual files to queue first
       for (const file of files) {
         const queueId = addToQueue(file, currentFolderId, erasureLevel);
+        folderQueueIds.push(queueId);  // Track our IDs
         updateQueueItem(queueId, { 
           status: 'uploading', 
           timeLeft: 'Folder upload in progress...' 
@@ -134,26 +138,24 @@ const UserDashboard = () => {
       // Upload entire folder via backend API
       const result = await uploadFolderApi({
         folderName,
-        files, // FileList passed to backend
+        files,
         parentFolderId: currentFolderId,
         erasureId: erasureLevel,
       });
 
       console.log("Folder upload result:", result);
       
-      // Mark all files as success
-      useUploadQueue.forEach(({ id }) => {
+      // ✅ Use folderQueueIds (our tracked array)
+      folderQueueIds.forEach(id => {
         updateQueueItem(id, { status: 'success' });
-        // Optional: keep or auto-remove after 3s
       });
 
-      // Refresh UI
       await loadCurrentFolderData();
     } catch (err) {
       console.error("Failed to upload folder", err);
       
-      // Mark all files as error
-      useUploadQueue.forEach(({ id }) => {
+      // ✅ Use folderQueueIds for errors too
+      folderQueueIds.forEach(id => {
         updateQueueItem(id, { status: 'error' });
       });
       
