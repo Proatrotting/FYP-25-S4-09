@@ -4,6 +4,7 @@ import HomePage from "./pages/HomePage";
 import ContactUs from "./pages/ContactUs";
 import LoginForm from "./components/LoginForm";
 import RegisterForm from "./components/RegisterForm";
+import Tutorial from "./pages/Tutorial";
 import Testimonials from "./pages/Testimonials";  
 import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
@@ -48,7 +49,8 @@ function App() {
             }
           />
           <Route path="/contact-us" element={<ContactUs />} />
-          <Route path="/testimonials" element={<Testimonials toggleRegister={toggleRegister}/>} />
+          <Route path="/tutorial" element={<Tutorial/>} />
+          <Route path="/testimonials" element={<Testimonials/>} />
         </Route>
 
         {/* Public share links - handles both files and folders */}

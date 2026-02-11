@@ -34,7 +34,9 @@ function NavBar({ toggleLogin }) {
         <li className={`nav-item${location.pathname === "/contact-us" ? " active" : ""}`} onClick={handleNavClick}>
           <Link to="/contact-us">Contact Us</Link>
         </li>
-        <li className="nav-item" onClick={handleNavClick}>Tutorial</li>
+        <li className={`nav-item${location.pathname === "/tutorial" ? " active" : ""}`} onClick={handleNavClick}>
+          <Link to="/tutorial">Tutorial</Link>
+        </li>
         <li className={`nav-item${location.pathname === "/testimonials" ? " active" : ""}`} onClick={handleNavClick}>
           <Link to="/testimonials">Testimonials</Link>
         </li>
