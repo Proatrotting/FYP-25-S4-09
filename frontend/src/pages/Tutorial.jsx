@@ -1,7 +1,9 @@
 import React from "react";
+import { useNavigate } from "react-router-dom";
 import "../styles/Tutorial.css";
 
 function Tutorial() {
+  const navigate = useNavigate();
   return (
     <div className="home-container">
       <main className="main-content">
