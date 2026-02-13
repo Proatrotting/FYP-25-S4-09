@@ -40,10 +40,8 @@ from app.routes.download_folders import router as download_folders_router
 from app.routes.sysadmin_account_management import router as sysadmin_account_management_router
 from app.routes.sysadmin_view_activity import router as sysadmin_view_activity_router
 from app.routes.sysadmin_node_management import router as sysadmin_node_management_router
-from app.routes.account_inspect import router as account_inspect_router # Testing route
-from app.routes.add_status_column import router as add_status_column_router # Testing route
 from app.heartbeat_test import router as heartbeat_test_router
-# from app.routes.oneTimeDebugging import router as oneTimeDebugging_router
+
 
 # Get maximum request size from environment variable (default 200MB)
 MAX_REQUEST_SIZE = int(os.getenv("MAX_REQUEST_SIZE", "209715200"))  # 200MB in bytes
@@ -97,9 +95,6 @@ app.include_router(sysadmin_account_management_router)
 app.include_router(sysadmin_view_activity_router)
 app.include_router(sysadmin_node_management_router)
 app.include_router(heartbeat_test_router)
-# app.include_router(oneTimeDebugging_router)
-app.include_router(account_inspect_router) # Testing route
-app.include_router(add_status_column_router) # Testing route
 
 
 # Health check

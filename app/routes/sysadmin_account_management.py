@@ -151,7 +151,6 @@ def deactivate_account(
     }
 
 
-
 @router.delete("", status_code=200)
 def delete_account(
     selector: AccountSelector,

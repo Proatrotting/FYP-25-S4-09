@@ -101,16 +101,14 @@ def get_activity_history(
         end_datetime = None
         if date_filter:
             try:
-                # Parse date string and get UTC range for database query
-                # This handles the local timezone (SGT) to UTC conversion automatically
                 start_datetime, end_datetime = parse_date_to_local_range(date_filter)
                 
                 sql_conditions.append(f"created_at >= ${param_index}")
-                params.append(start_datetime.isoformat())  # Convert to ISO string for master node
+                params.append(start_datetime.isoformat())  
                 param_index += 1
                 
                 sql_conditions.append(f"created_at <= ${param_index}")
-                params.append(end_datetime.isoformat())  # Convert to ISO string for master node
+                params.append(end_datetime.isoformat())  
                 param_index += 1
                 
             except ValueError:
@@ -145,10 +143,8 @@ def get_activity_history(
         
         activities = master_db.select(activities_sql, params)
         
-        # Convert to response format with Pydantic validation handling datetime
         activity_list = []
         for activity in activities:
-            # Handle details field (might be JSON or dict)
             details_value = activity.get("details")
             if isinstance(details_value, str):
                 import json
@@ -157,7 +153,6 @@ def get_activity_history(
                 except:
                     details_value = None
             
-            # Pydantic validator will handle datetime conversion automatically
             activity_list.append(ActivityDetail(
                 activity_id=str(activity["activity_id"]),
                 action_type=activity["action_type"],
@@ -166,7 +161,7 @@ def get_activity_history(
                 ip_address=activity.get("ip_address"),
                 user_agent=activity.get("user_agent"),
                 details=details_value,
-                created_at=activity["created_at"]  # Validator will handle datetime conversion
+                created_at=activity["created_at"]
             ))
         
         return ActivityHistoryResponse(

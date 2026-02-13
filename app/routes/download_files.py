@@ -11,7 +11,6 @@ from app.routes.login import oauth2_scheme
 from app.core.config import get_settings
 from app.core.erasure_coding import get_erasure_coder_for_profile, get_erasure_coder_for_account
 from app.core.lazy_repair import LazyRepair
-# Import AES-256 decryption
 from app.core.file_encryption import decrypt_file_data
 from app.core.key_storage import get_key_storage_manager
 from app.core.shamir_secret_sharing import reconstruct_key_from_shares, get_sss_config

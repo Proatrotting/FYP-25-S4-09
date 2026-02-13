@@ -25,7 +25,6 @@ class RegisterRequest(BaseModel):
 	username: str
 	email: EmailStr
 	password: str
-	# account_type removed - all new accounts are FREE by default
 
 
 class TokenResponse(BaseModel):
