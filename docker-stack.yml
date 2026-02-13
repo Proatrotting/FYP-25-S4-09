@@ -10,12 +10,13 @@ services:
       NODE_PORT: 3000
       HEARTBEAT_INTERVAL: 30000
       STORAGE_PATH: /data/master_node
-      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
-      POSTGRES_HOST: 34.143.181.179
+      DATABASE_URL: postgresql://postgres:SecurePassword@1@104.198.221.87:5432/temp_fyp_storage?sslmode=require
+      POSTGRES_HOST: 104.198.221.87
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
-      POSTGRES_DB: fyp-storage
+      POSTGRES_PASSWORD: SecurePassword@1
+      POSTGRES_DB: temp_fyp_storage
+      POSTGRES_SSL: true
       POSTGRES_MAX_CONNECTIONS: 25
       POSTGRES_MIN_CONNECTIONS: 5
       POSTGRES_SSL: "true"
@@ -42,7 +43,7 @@ services:
     image: aiess/fastapi-backend:latest
     environment:
       # Google Cloud SQL PostgreSQL Connection
-      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
+      DATABASE_URL: postgresql://postgres:SecurePassword@1@104.198.221.87:5432/temp_fyp_storage?sslmode=require
       MASTER_NODE_URL: http://master_node:3000
       FASTAPI_INTERNAL_URL: http://fastapi:8000
       FRONTEND_URL: https://fyp25s409-shard-git-cloud-variant-shard-fyp.vercel.app
@@ -109,17 +110,18 @@ services:
     image: aiess/fastapi-backend:latest
     command: python app/repair_worker.py
     environment:
-      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
+      DATABASE_URL: "postgresql://postgres:SecurePassword@1@104.198.221.87:5432/temp_fyp_storage?sslmode=require"
       MASTER_NODE_URL: http://master_node:3000
       REPAIR_INTERVAL: 60
       MAX_CONCURRENT_REPAIRS: 3
       WORKER_ID: repair-worker-1
-      POSTGRES_HOST: 34.143.181.179
+      POSTGRES_HOST: 104.198.221.87
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
-      POSTGRES_DB: fyp-storage
-    networks:
+      POSTGRES_PASSWORD: "SecurePassword@1"
+      POSTGRES_DB: temp_fyp_storage
+      POSTGRES_SSL: true
+        networks:
       - storage_network
     deploy:
       replicas: 1
@@ -136,16 +138,17 @@ services:
     image: aiess/fastapi-backend:latest
     command: python app/heartbeat_monitor.py
     environment:
-      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
+      DATABASE_URL: "postgresql://postgres:SecurePassword@1@104.198.221.87:5432/temp_fyp_storage?sslmode=require"
       MASTER_NODE_URL: http://master_node:3000
       HEARTBEAT_CHECK_INTERVAL: 30
       HEARTBEAT_TIMEOUT: 45
       MONITOR_ID: heartbeat-monitor-1
-      POSTGRES_HOST: 34.143.181.179
+      POSTGRES_HOST: 104.198.221.87
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
-      POSTGRES_DB: fyp-storage
+      POSTGRES_PASSWORD: "SecurePassword@1"
+      POSTGRES_DB: temp_fyp_storage
+      POSTGRES_SSL: true
     networks:
       - storage_network
     deploy:
@@ -163,16 +166,17 @@ services:
     image: aiess/fastapi-backend:latest
     command: python app/active_repair_service.py
     environment:
-      DATABASE_URL: "postgresql://postgres:PZe|0muoOk1fVH/j@34.143.181.179:5432/fyp-storage?sslmode=require"
+      DATABASE_URL: "postgresql://postgres:SecurePassword@1@104.198.221.87:5432/temp_fyp_storage?sslmode=require"
       ACTIVE_REPAIR_INTERVAL: 300  # Scan every 5 minutes
       MAX_REPAIR_JOBS_PER_SCAN: 50
       ACTIVE_REPAIR_SERVICE_ID: active-repair-service-1
       MASTER_NODE_URL: http://master_node:3000
-      POSTGRES_HOST: 34.143.181.179
+      POSTGRES_HOST: 104.198.221.87
       POSTGRES_PORT: 5432
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: "PZe|0muoOk1fVH/j"
-      POSTGRES_DB: fyp-storage
+      POSTGRES_PASSWORD: "SecurePassword@1"
+      POSTGRES_DB: temp_fyp_storage
+      POSTGRES_SSL: true
     networks:
       - storage_network
     deploy:
