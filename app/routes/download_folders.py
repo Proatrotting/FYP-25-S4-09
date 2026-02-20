@@ -345,9 +345,9 @@ async def download_folder_as_zip(
                         
                         # Add to ZIP with proper path
                         zip_file.writestr(relative_path, file_data)
-                        logger.info(f"✅ Added to ZIP: {relative_path}")
+                        logger.info(f"Added to ZIP: {relative_path}")
                     else:
-                        logger.error(f"❌ Failed to download: {file_meta['file_name']} - {result.get('error')}")
+                        logger.error(f"Failed to download: {file_meta['file_name']} - {result.get('error')}")
                         
                 except Exception as e:
                     logger.error(f"Error processing file {file_meta['file_name']}: {e}")

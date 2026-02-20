@@ -83,8 +83,8 @@ def get_current_account(token=Depends(oauth2_scheme), master_db: MasterNodeDB = 
 async def update_profile(
     update_data: UpdateProfileRequest,
     request: Request,
-    current_account: dict = Depends(get_current_account),  # ✅ Dict from master node
-    master_db: MasterNodeDB = Depends(get_master_db)  # ✅ Master node DB
+    current_account: dict = Depends(get_current_account),  # Dict from master node
+    master_db: MasterNodeDB = Depends(get_master_db)  # Master node DB
 ):
     try:
         logger.info(f"Profile update request for account {current_account['account_id']}")
@@ -100,7 +100,7 @@ async def update_profile(
         # Update username if provided
         if update_data.username:
             if update_data.username != current_account["username"]:
-                # ✅ NEW: Check via master node
+                # NEW: Check via master node
                 existing = master_db.select(
                     "SELECT account_id FROM account WHERE username = $1 AND account_id != $2",
                     [update_data.username, current_account["account_id"]]
@@ -111,7 +111,7 @@ async def update_profile(
                         detail="Username is already taken"
                     )
                 
-                # ✅ NEW: Update via master node
+                # NEW: Update via master node
                 master_db.execute(
                     "UPDATE account SET username = $1 WHERE account_id = $2",
                     [update_data.username, current_account["account_id"]]
@@ -123,7 +123,7 @@ async def update_profile(
         # Update email if provided
         if update_data.email:
             if update_data.email != current_account["email"]:
-                # ✅ NEW: Check via master node
+                # NEW: Check via master node
                 existing = master_db.select(
                     "SELECT account_id FROM account WHERE email = $1 AND account_id != $2",
                     [update_data.email, current_account["account_id"]]
@@ -134,7 +134,7 @@ async def update_profile(
                         detail="Email is already registered"
                     )
                 
-                # ✅ NEW: Update via master node
+                # NEW: Update via master node
                 master_db.execute(
                     "UPDATE account SET email = $1 WHERE account_id = $2",
                     [update_data.email, current_account["account_id"]]
@@ -145,7 +145,7 @@ async def update_profile(
         
         message = f"Profile updated successfully. Updated fields: {', '.join(updates_made)}" if updates_made else "No changes were made to the profile"
         
-        # ✅ Format created_at
+        # Format created_at
         created_at = current_account["created_at"]
         created_at_str = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
         
@@ -201,7 +201,7 @@ async def update_password(
                 detail="New password must be different from current password"
             )
         
-        # ✅ NEW: Update password via master node
+        # NEW: Update password via master node
         new_hash = get_password_hash(password_data.new_password)
         master_db.execute(
             "UPDATE account SET password_hash = $1 WHERE account_id = $2",

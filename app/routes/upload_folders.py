@@ -479,7 +479,7 @@ async def upload_folder(
                         file_size=result.get("file_size"),
                         fragments_stored=result.get("fragments_stored")
                     ))
-                    logger.info(f"✅ Uploaded: {file_data.relative_path}")
+                    logger.info(f"Uploaded: {file_data.relative_path}")
                 else:
                     files_failed += 1
                     error_msg = result.get("error", "Unknown error")
@@ -490,7 +490,7 @@ async def upload_folder(
                         error=error_msg
                     ))
                     errors.append(f"{file_data.relative_path}: {error_msg}")
-                    logger.error(f"❌ Failed: {file_data.relative_path} - {error_msg}")
+                    logger.error(f"Failed: {file_data.relative_path} - {error_msg}")
                     
             except Exception as e:
                 files_failed += 1
@@ -502,7 +502,7 @@ async def upload_folder(
                     error=error_msg
                 ))
                 errors.append(f"{file_data.relative_path}: {error_msg}")
-                logger.error(f"❌ Exception uploading {file_data.relative_path}: {e}")
+                logger.error(f"Exception uploading {file_data.relative_path}: {e}")
         
         success = files_failed == 0
         

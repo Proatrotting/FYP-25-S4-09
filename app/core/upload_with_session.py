@@ -235,12 +235,12 @@ def process_file_upload_with_session(
                     progress = int((fragments_stored / total_fragments_expected) * file_size)
                     session.update_progress(progress)
                     
-                    logger.info(f"✅ Fragment {fragment_id} stored successfully ({fragments_stored}/{total_fragments_expected})")
+                    logger.info(f"Fragment {fragment_id} stored successfully ({fragments_stored}/{total_fragments_expected})")
                 else:
-                    logger.error(f"❌ Failed to store fragment {fragment_id}: {store_response.text}")
+                    logger.error(f"Failed to store fragment {fragment_id}: {store_response.text}")
                     
             except Exception as e:
-                logger.error(f"❌ Exception storing fragment {i}: {e}")
+                logger.error(f"Exception storing fragment {i}: {e}")
                 continue
         
         # Final cancellation check

@@ -2254,7 +2254,7 @@ async def download_user_shared_folder(
                 
                 # Write actual file content to ZIP
                 zip_file.writestr(zip_path, file_data)
-                logger.info(f"✅ Added to ZIP: {zip_path}")
+                logger.info(f"Added to ZIP: {zip_path}")
                 
             except Exception as e:
                 # Add error file if download fails

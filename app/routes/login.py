@@ -318,7 +318,7 @@ def get_current_user(
     from app.core.security import decode_access_token
 
     try:
-        # ✅ Extract the raw token string from the HTTPAuthorizationCredentials object
+        # Extract the raw token string from the HTTPAuthorizationCredentials object
         token_str = token.credentials if hasattr(token, "credentials") else token
 
         payload = decode_access_token(token_str)

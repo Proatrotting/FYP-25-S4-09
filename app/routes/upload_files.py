@@ -325,12 +325,12 @@ async def process_file_upload(
             
             if store_response.status_code in [200, 201]:
                 fragments_stored += 1
-                logger.info(f"✅ Fragment {fragment_id} stored successfully")
+                logger.info(f"Fragment {fragment_id} stored successfully")
             else:
-                logger.error(f"❌ Failed to store fragment {fragment_id}: {store_response.text}")
+                logger.error(f"Failed to store fragment {fragment_id}: {store_response.text}")
                 
         except Exception as e:
-            logger.error(f"❌ Exception storing fragment {i}: {e}")
+            logger.error(f"Exception storing fragment {i}: {e}")
             continue
     
     total_fragments_expected = len(fragment_data_list)
