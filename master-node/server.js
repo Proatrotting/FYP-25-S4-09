@@ -1373,7 +1373,7 @@ app.post('/repair-jobs', async (req, res) => {
             fragments_available || 0
         ]);
         
-        console.log(`✅ Created repair job ${job_id} for version ${version_id}`);
+        console.log(`Created repair job ${job_id} for version ${version_id}`);
         
         res.status(201).json({ 
             message: 'Repair job created successfully',
@@ -1527,7 +1527,7 @@ async function startServer() {
         // Start the server
         app.listen(NODE_PORT, '0.0.0.0', () => {
             console.log('=================================');
-            console.log('🚀 Master Node Server Started');
+            console.log('Master Node Server Started');
             console.log('=================================');
             console.log(`Port: ${NODE_PORT}`);
             console.log(`Hostname: ${NODE_HOSTNAME}`);

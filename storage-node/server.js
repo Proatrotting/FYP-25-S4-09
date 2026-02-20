@@ -18,10 +18,10 @@ async function getVMExternalIP() {
                 timeout: 3000 
             }
         );
-        console.log(`✅ Found VM external IP from GCP metadata: ${response.data}`);
+        console.log(`Found VM external IP from GCP metadata: ${response.data}`);
         return response.data;
     } catch (error) {
-        console.warn('⚠️  Could not fetch VM external IP from GCP metadata:', error.message);
+        console.warn('Could not fetch VM external IP from GCP metadata:', error.message);
         return null;
     }
 }
@@ -94,7 +94,7 @@ async function registerWithMaster(){
         });
         
         if (response.data.success) {
-            console.log(`✅ Storage Node ${NODE_ID} registered with master node.`);
+            console.log(`Storage Node ${NODE_ID} registered with master node.`);
             console.log('Hostname/IP:', EFFECTIVE_HOSTNAME);
             console.log('Role:', NODE_ROLE);
             console.log('Master Node:', MASTER_NODE_URL);
@@ -183,7 +183,7 @@ app.post('/fragments', async (req, res) => {
         // Store fragment locally as an "object"
         await fs.writeFile(objectPath, Buffer.from(data, 'base64'));
 
-        console.log(`✅ Fragment ${fragmentId} stored at ${objectPath}`);
+        console.log(`Fragment ${fragmentId} stored at ${objectPath}`);
 
         // Notify master node about fragment storage with logical object address
         const fragmentAddress = `objects/${key}`; // logical address; master stores this
@@ -398,7 +398,7 @@ process.on('SIGTERM', async () => {
 
 async function startServer(){
     console.log('=================================');
-    console.log('🚀 Storage Node Starting');
+    console.log('Storage Node Starting');
     console.log('=================================');
     
     // ============================================================================
@@ -416,7 +416,7 @@ async function startServer(){
     console.log(`VM External IP: ${VM_EXTERNAL_IP || 'Not available (not running on GCP VM)'}`);
     console.log(`ENV Hostname: ${ENV_HOSTNAME || 'Not set'}`);
     console.log(`Container IP: ${CONTAINER_IP || 'Not found'}`);
-    console.log(`✅ Effective Hostname (for registration): ${EFFECTIVE_HOSTNAME}`);
+    console.log(`Effective Hostname (for registration): ${EFFECTIVE_HOSTNAME}`);
     console.log(`Port: ${NODE_PORT}`);
     console.log(`Master Node: ${MASTER_NODE_URL}`);
     console.log('=================================');
@@ -434,7 +434,7 @@ async function startServer(){
     setInterval(heartbeat, HEARTBEAT_INTERVAL);
     setInterval(updateCapacity, HEARTBEAT_INTERVAL * 6);
     app.listen(NODE_PORT, '0.0.0.0', () => {
-        console.log(`✅ Storage Node server running on ${EFFECTIVE_HOSTNAME}:${NODE_PORT}`);
+        console.log(`Storage Node server running on ${EFFECTIVE_HOSTNAME}:${NODE_PORT}`);
         console.log(`Connected to Master Node: ${MASTER_NODE_URL}`);
     });
 }
