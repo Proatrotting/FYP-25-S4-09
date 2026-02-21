@@ -1,9 +1,13 @@
-# CSIT314CSR Full Stack Project
+# FYP Full Stack Project
 
 ## Tech Stack
 - **Frontend:** React.js
 - **Backend:** FastAPI (Python)
 - **Database:** PostgreSQL
+
+## Admin login credentials
+- **Username:** adminbryan
+- **Password:** password
 
 ---
 
